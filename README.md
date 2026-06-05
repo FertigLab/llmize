@@ -50,4 +50,3 @@ The script:
 
 **JSON parsing error:**
 - Verify your input JSON file is valid
-- Try opening it in a JSON validator
