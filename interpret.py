@@ -1,13 +1,18 @@
+from __future__ import annotations
+
 import argparse
 import json
 import os
 import sys
+import subprocess
 from datetime import datetime
 
 import ollama
 
 
 # Prompt builder
+
+SAMPLESHEET_KEY = "multiqc_samplesheet"
 
 SYSTEM_PROMPT = """You are an expert in bioinformatics, sequencing technologies, genomics data analysis, and adjacent fields.
 
@@ -19,37 +24,7 @@ as well as plots of different types (bar plot, line plot, scatter plot, heatmap,
 
 You are given data of a MultiQC report. Your task is to analyse the data and give a concise summary.
 
-
-----------------------
-
-Tools used in the report:
-
-1. Sample Sheet
-Description: The sample sheet provided as input to the pipeline
-
-2. Atlas Summary
-Description: Summary of the cells and genes in the atlas. If same atlas is used for multiple samples, table rows will be repeated
-
-3. Atlas Cell Types
-Description: Summary of the cell types in the atlas
-
-4. Input Summary
-Description: Summary of the AnnData object right after it was read
-
-5. Output Cell Types
-Description: Assigned cell types based on deconvolution / cell typing results
-
-6. Cell Type Probabilities
-Description: Average max cell type probabilities used to assign the cell types (greater is better)
-
-7. Squidpy Ligrec Interactions
-Description: Mean interaction across samples shown as no differential interactions were found between ['sample2'] and ['sample1']
-
-8. Moran I Interactions
-Description: Mean interaction across samples shown as no differential interactions were found between ['sample2'] and ['sample1']
-
-9. Spatial Neighbors
-Description: Cell type immediate neighborhood across samples"""
+"""
 
 
 def build_prompt(report: dict) -> str:
@@ -60,22 +35,393 @@ def build_prompt(report: dict) -> str:
         f"```json\n{report_str}\n```"
     )
 
+
+def _split_descriptor(section_obj: dict) -> tuple:
+    """Split a section into its descriptor metadata and its data payload.
+
+    The descriptor is every key except ``data`` (description, structure,
+    properties, key_type, value_type, key_format, note, ...). Returning it
+    separately lets us feed the model the field definitions alongside the
+    values so its interpretation is grounded in what each number means.
+    """
+    descriptor = {k: v for k, v in section_obj.items() if k != "data"}
+    data = section_obj.get("data", {})
+    return descriptor, data
+
+
+def build_samplesheet_context(report: dict) -> str:
+    """Render the sample sheet as shared context to append to the system prompt.
+
+    The sample sheet (sample -> responder / non-responder, etc.) applies to every
+    other section, so it belongs in the persistent system prompt rather than being
+    re-sent with each per-section call.
+    """
+    samplesheet = report.get(SAMPLESHEET_KEY)
+    if not isinstance(samplesheet, dict):
+        return ""
+    return (
+        "\n\n--- SAMPLE SHEET (shared context for every section below) ---\n"
+        f"```json\n{json.dumps(samplesheet, indent=2)}\n```\n"
+        "Carry these per-sample labels (e.g. responder vs non-responder) into your "
+        "interpretation of every section."
+    )
+
+
+def _percentages(counts: dict) -> dict:
+    """Return {key: percent-of-total} for a flat {key: count} mapping (1 d.p.)."""
+    total = sum(v for v in counts.values() if isinstance(v, (int, float)))
+    if total <= 0:
+        return {}
+    return {
+        k: round(v / total * 100, 1)
+        for k, v in counts.items()
+        if isinstance(v, (int, float))
+    }
+
+
+def compute_percentages(section_name: str, data: dict) -> dict:
+    """Derive percentage tables for count-based cell-type sections.
+
+    Spatial neighbors are nested (focal -> sample -> {neighbor: count}); the
+    ``*_ct`` sections are flat (group -> {cell_type: count}). Returns a structure
+    mirroring ``data`` with counts replaced by % of total, or {} if not applicable.
+    Probability sections (e.g. ``*_probs``) are left alone — they are not counts.
+    """
+    if not isinstance(data, dict):
+        return {}
+
+    if section_name == "multiqc_spatial_neighbors":
+        out = {}
+        for focal, sub in data.items():
+            if isinstance(sub, dict) and isinstance(sub.get("data"), dict):
+                per_sample = {
+                    sample: _percentages(counts)
+                    for sample, counts in sub["data"].items()
+                    if isinstance(counts, dict)
+                }
+                if any(per_sample.values()):
+                    out[focal] = {
+                        "focal_cell_type": sub.get("focal_cell_type"),
+                        "data_percent": per_sample,
+                    }
+        return out
+
+    if section_name.endswith("_ct"):
+        out = {
+            group: _percentages(counts)
+            for group, counts in data.items()
+            if isinstance(counts, dict)
+        }
+        return {k: v for k, v in out.items() if v}
+
+    return {}
+
+
+def build_section_prompt(section_name: str, section_obj: dict) -> str:
+    """Build a focused prompt that analyses a single MultiQC section.
+
+    Works for any section shape, including ``multiqc_spatial_neighbors`` whose
+    ``data`` holds a dynamic number of focal-cell-type sub-sections (not always 6).
+    For count-based cell-type sections, derived percentages are included so the
+    model cites proportions instead of (mis-)estimating them from raw counts.
+    """
+    descriptor, data = _split_descriptor(section_obj)
+    prompt = (
+        f"Analyze the MultiQC section `{section_name}` in isolation.\n\n"
+        "Section descriptor (defines what each field/key/value means):\n"
+        f"```json\n{json.dumps(descriptor, indent=2)}\n```\n\n"
+        "Section data:\n"
+        f"```json\n{json.dumps(data, indent=2)}\n```\n\n"
+    )
+
+    percentages = compute_percentages(section_name, data)
+    if percentages:
+        prompt += (
+            "Derived percentages (each cell type as % of the group total — use THESE "
+            "when describing composition or neighborhoods, do not re-estimate from counts):\n"
+            f"```json\n{json.dumps(percentages, indent=2)}\n```\n\n"
+        )
+
+    prompt += (
+        "Give a concise, analytical interpretation of THIS section only: the dominant "
+        "patterns, notable or outlier values, differences between samples (relate them to "
+        "the responder / non-responder labels from the sample sheet), and the biological "
+        "meaning. Cite specific numbers/percentages. Do not speculate about sections you were not shown."
+    )
+    return prompt
+
+
+def iter_analysis_sections(report: dict):
+    """Yield (name, section_obj) for each major section to analyse one-by-one.
+
+    Excludes the sample sheet (folded into the system prompt) and any entry that
+    carries no ``data`` payload.
+    """
+    for name, section_obj in report.items():
+        if name == SAMPLESHEET_KEY:
+            continue
+        if isinstance(section_obj, dict) and "data" in section_obj:
+            yield name, section_obj
+
+
+SYNTHESIS_SYSTEM_PROMPT = """You are an expert bioinformatician. You are given the per-section analyses of a SINGLE MultiQC spatial transcriptomics report.
+
+Synthesize them into one concise executive summary of a few short paragraphs. Cover:
+- the overall picture and whether the pipeline appears to have run successfully,
+- the most important quantitative findings, citing key numbers and percentages,
+- a clear verdict on whether the data supports any responder vs non-responder difference.
+
+Be decisive and readable. Do not repeat each section verbatim or list sections one by one.
+Output only the summary prose — do NOT add your own title or markdown heading.
+"""
+
+
+def synthesize_sections(
+    responses: list,
+    model: str,
+    num_ctx: int = 32768,
+    samplesheet_context: str = "",
+) -> str:
+    """Run a final Ollama call that condenses per-section analyses into a summary."""
+    combined = "\n\n".join(f"### {name}\n{text.strip()}" for name, text in responses)
+    prompt = (
+        "Here are the per-section analyses of one MultiQC spatial transcriptomics report. "
+        "Write the executive summary as instructed.\n\n"
+        f"{combined}"
+    )
+    return chat_ollama(
+        prompt,
+        model=model,
+        system=SYNTHESIS_SYSTEM_PROMPT + samplesheet_context,
+        num_ctx=num_ctx,
+    )
+
+
+def _strip_leading_heading(text: str) -> str:
+    """Drop a leading markdown heading line so it doesn't duplicate our own."""
+    stripped = text.strip()
+    if stripped.startswith("#"):
+        lines = stripped.split("\n", 1)
+        stripped = lines[1].strip() if len(lines) > 1 else ""
+    return stripped
+
+
+def combine_responses(responses: list, summary: str = None) -> str:
+    """Combine per-section responses into a single markdown document.
+
+    If ``summary`` is provided, it is placed up front as an Executive Summary.
+    """
+    parts = ["# MultiQC Spatial Transcriptomics Interpretation\n"]
+    if summary:
+        parts.append(f"\n## Executive Summary\n\n{_strip_leading_heading(summary)}\n")
+        parts.append("\n---\n\n## Per-section detail\n")
+    for name, text in responses:
+        parts.append(f"\n## {name}\n\n{text.strip()}\n")
+    return "\n".join(parts)
+
+
+def interpret_per_section(
+    report: dict,
+    model: str,
+    num_ctx: int = 32768,
+    extra_system_context: str = "",
+    synthesize_final: bool = True,
+) -> str:
+    """Analyse each major section in its own Ollama call, then combine the results.
+
+    The sample sheet and any ``extra_system_context`` (e.g. ToolUniverse gene
+    enrichment) are placed in the persistent system prompt so every per-section
+    call shares that grounding. When ``synthesize_final`` is set, a final call
+    condenses the per-section analyses into an executive summary placed up front.
+    Returns the combined markdown document.
+    """
+    samplesheet_context = build_samplesheet_context(report)
+    system = SYSTEM_PROMPT + samplesheet_context + extra_system_context
+
+    # Resolve the model once
+    model = ensure_model(model)
+
+    responses = []
+    sections = list(iter_analysis_sections(report))
+    print(f"[interpret] Analyzing {len(sections)} sections one-by-one with model '{model}'.")
+    for name, section_obj in sections:
+        print(f"[interpret]   -> {name}")
+        prompt = build_section_prompt(name, section_obj)
+        text = chat_ollama(prompt, model=model, system=system, num_ctx=num_ctx)
+        responses.append((name, text))
+
+    summary = None
+    if synthesize_final and responses:
+        print("[interpret] Synthesizing executive summary from per-section analyses...")
+        summary = synthesize_sections(responses, model, num_ctx, samplesheet_context)
+
+    return combine_responses(responses, summary)
+
+
+def _available_models() -> list:
+    """Try to get a list of locally available Ollama models.
+
+    Tries multiple client function names to be robust across ollama client versions.
+    Returns a list of model names (strings).
+    """
+    candidates = ["models", "list_models", "list"]
+    for name in candidates:
+        fn = getattr(ollama, name, None)
+        if not callable(fn):
+            continue
+        try:
+            res = fn()
+        except Exception:
+            continue
+
+        if isinstance(res, dict) and "models" in res:
+            items = res["models"]
+        else:
+            items = res
+
+        out = []
+        if isinstance(items, (list, tuple)):
+            for it in items:
+                if isinstance(it, str):
+                    out.append(it)
+                elif isinstance(it, dict):
+                    if "name" in it:
+                        out.append(it["name"])
+                    elif "model" in it:
+                        out.append(it["model"])
+        if out:
+            return out
+
+    cli_cmds = [
+        ["ollama", "list", "--json"],
+        ["ollama", "models", "--json"],
+        ["ollama", "list"],
+    ]
+    for cmd in cli_cmds:
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        except FileNotFoundError:
+            break
+        out = proc.stdout.strip()
+        if not out:
+            continue
+        try:
+            parsed = json.loads(out)
+            items = parsed if isinstance(parsed, (list, dict)) else None
+            if isinstance(items, dict) and "models" in items:
+                items = items["models"]
+            names = []
+            if isinstance(items, (list, tuple)):
+                for it in items:
+                    if isinstance(it, str):
+                        names.append(it)
+                    elif isinstance(it, dict):
+                        if "name" in it:
+                            names.append(it["name"])
+                        elif "model" in it:
+                            names.append(it["model"])
+            if names:
+                return names
+        except Exception:
+            lines = out.splitlines()
+            names = []
+            for line in lines:
+                parts = line.strip().split()
+                if not parts:
+                    continue
+                if any(h in line.lower() for h in ("name", "model", "---")):
+                    continue
+                names.append(parts[0])
+            if names:
+                return names
+
+    return []
+
 # Ollama call
 
-def call_ollama(prompt: str, model: str, system: str = SYSTEM_PROMPT) -> str:
-    """Send prompt to Ollama and return the response text."""
-    print(f"[interpret] Calling model '{model}' via Ollama...")
+def ensure_model(model: str) -> str:
+    """Resolve a usable Ollama model name, prompting the user if needed.
 
+    If the requested model is not present locally, offer the user choices:
+    - try another model name
+    - run `ollama pull <model>` to download
+    - abort
+
+    Returns the resolved model name. Call this once before a batch of chats so
+    the per-section loop does not re-prompt for every section.
+    """
+    models = _available_models()
+    if models and model not in models:
+        lower_models = [m.lower() for m in models]
+        if model.lower() in lower_models:
+            return models[lower_models.index(model.lower())]
+
+        tag_matches = [
+            m for m in models
+            if m.lower() == f"{model.lower()}:latest" or m.lower().startswith(f"{model.lower()}:")
+        ]
+        if len(tag_matches) == 1:
+            print(f"[interpret] Resolved model '{model}' -> '{tag_matches[0]}'.")
+            return tag_matches[0]
+
+        suggestions = [m for m in models if model.lower() in m.lower()]
+        print(f"[interpret] Model '{model}' not found locally.")
+        if suggestions:
+            print("Did you mean one of: {}".format(", ".join(suggestions)))
+        print("Available models: {}".format(", ".join(models)))
+        if not sys.stdin.isatty():
+            sys.exit(
+                "[interpret] Aborted: model not available and no interactive terminal "
+                "to choose one. Re-run with an exact model name (e.g. --model {}).".format(
+                    suggestions[0] if suggestions else models[0]
+                )
+            )
+        choice = input("Enter alternative model name to try, type 'pull' to download a model, or press Enter to abort: ").strip()
+        if not choice:
+            sys.exit("[interpret] Aborted: requested model not available.")
+        if choice.lower() == "pull":
+            to_pull = input("Enter model name to pull (e.g. 'gemma8'): ").strip()
+            if not to_pull:
+                sys.exit("[interpret] Aborted: no model specified to pull.")
+            print(f"[interpret] Pulling model '{to_pull}' via ollama CLI...")
+            try:
+                subprocess.check_call(["ollama", "pull", to_pull])
+            except FileNotFoundError:
+                print("ollama CLI not found in PATH. Please install Ollama or pull the model manually: ollama pull <model>")
+                sys.exit(1)
+            except subprocess.CalledProcessError as e:
+                print(f"Failed to pull model: {e}")
+                sys.exit(1)
+
+            models = _available_models()
+            if to_pull in models:
+                return to_pull
+            print("Model pull completed but model not listed by Ollama client. Proceeding to attempt chat anyway.")
+            return to_pull
+        return choice
+
+    return model
+
+
+def chat_ollama(prompt: str, model: str, system: str = SYSTEM_PROMPT, num_ctx: int = 32768) -> str:
+    """Send one prompt to an already-resolved Ollama model and return the text."""
     response = ollama.chat(
         model=model,
         messages=[
             {"role": "system", "content": system},
             {"role": "user",   "content": prompt},
         ],
-        options={"num_ctx": 32768},
+        options={"num_ctx": num_ctx},
     )
-
     return response["message"]["content"]
+
+
+def call_ollama(prompt: str, model: str, system: str = SYSTEM_PROMPT, num_ctx: int = 32768) -> str:
+    """Resolve the model (prompting if needed) and send a single prompt."""
+    print(f"[interpret] Preparing to call model '{model}' via Ollama with num_ctx={num_ctx}...")
+    model = ensure_model(model)
+    print(f"[interpret] Calling model '{model}' via Ollama...")
+    return chat_ollama(prompt, model=model, system=system, num_ctx=num_ctx)
 
 
 def load_report(path: str) -> dict:
@@ -91,8 +437,6 @@ def save_output(text: str, path: str) -> None:
         f.write(text)
     print(f"[interpret] Response saved to: {path}")
 
-
-# Entry point
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -119,7 +463,33 @@ def parse_args() -> argparse.Namespace:
     default=32768,
     help="Context window size (default: 32768)",
     )
+    parser.add_argument(
+        "--whole-report",
+        action="store_true",
+        help="Send the entire report in a single call instead of analysing each section one-by-one.",
+    )
+    parser.add_argument(
+        "--enrich",
+        action="store_true",
+        help="Enrich the system prompt with ToolUniverse gene annotations (requires the 'tooluniverse' package).",
+    )
+    parser.add_argument(
+        "--no-synthesis",
+        action="store_true",
+        help="Skip the final executive-summary synthesis pass (section-by-section mode only).",
+    )
     return parser.parse_args()
+
+
+def _build_enrichment_context(report: dict, enabled: bool) -> str:
+    if not enabled:
+        return ""
+    try:
+        from enrich import enrich_report
+    except Exception as exc:
+        print(f"[interpret] Enrichment unavailable ({exc}); continuing without it.")
+        return ""
+    return enrich_report(report)
 
 
 def main() -> None:
@@ -129,7 +499,7 @@ def main() -> None:
         stem = os.path.splitext(os.path.basename(args.input))[0]
         out_dir = os.path.dirname(os.path.abspath(args.input))
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        args.output = os.path.join(out_dir, f"{stem}_interpretation_{timestamp}.txt")
+        args.output = os.path.join(out_dir, f"{stem}_interpretation_{timestamp}.md")
 
     print(f"[interpret] Loading report: {args.input}")
     report = load_report(args.input)
@@ -137,8 +507,21 @@ def main() -> None:
     section_count = sum(1 for v in report.values() if isinstance(v, dict) and "data" in v)
     print(f"[interpret] Loaded {section_count} data sections.")
 
-    prompt = build_prompt(report)
-    response_text = call_ollama(prompt, model=args.model)
+    enrichment = _build_enrichment_context(report, args.enrich)
+
+    if args.whole_report:
+        prompt = build_prompt(report)
+        response_text = call_ollama(
+            prompt, model=args.model, system=SYSTEM_PROMPT + enrichment, num_ctx=args.num_ctx
+        )
+    else:
+        response_text = interpret_per_section(
+            report,
+            model=args.model,
+            num_ctx=args.num_ctx,
+            extra_system_context=enrichment,
+            synthesize_final=not args.no_synthesis,
+        )
 
     save_output(response_text, args.output)
 

@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# OS
+.DS_Store
+
+# Pipeline run artifacts (generated outputs, caches, logs)
+data/extracted_multiqc_data
+data/*_interpretation_*.md
+data/*_interpretation_*.txt
+data/extracted_*.json
+data/annotated_report.json
+data/enrichment_cache.json
+data/*.log
+res.txt

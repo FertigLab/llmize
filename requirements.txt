@@ -1,0 +1,15 @@
+# --- Core (required) ---
+# Python client for the Ollama runtime. NOTE: this is only the client library.
+# The Ollama application/server itself must be installed separately (see README),
+# and you must pull a model (e.g. `ollama pull gemma2`) before running the pipeline.
+ollama>=0.5
+
+# --- Optional: biological enrichment (pipeline.py --enrich / enrich.py) ---
+# ToolUniverse exposes biomedical tools (Open Targets, Monarch, ...) used to annotate
+# genes for richer prompt context. Enrichment degrades gracefully if these are absent,
+# so they are optional — but installing them enables the --enrich feature out of the box.
+#   * Python 3.9 resolves to tooluniverse 0.1.4 (Open Targets / Monarch / FDA tools).
+#   * Python 3.10+ gets newer releases with more tools.
+# PyYAML is a runtime dependency of tooluniverse that its wheel does not always pull in.
+tooluniverse
+PyYAML>=6
