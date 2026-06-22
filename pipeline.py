@@ -15,7 +15,15 @@ from json_reduction.json_load import resolve_path, load_json, DATA_DIR
 from json_reduction.json_clean import extract_report_saved_raw_data
 from json_reduction.json_write import save_json
 from json_reduction.json_merger import merge
-from interpret import build_prompt, call_ollama, interpret_per_section, SYSTEM_PROMPT
+from interpret import (
+    build_prompt,
+    call_ollama,
+    interpret_per_section,
+    print_thinking,
+    build_gen_options,
+    build_user_instruction,
+    SYSTEM_PROMPT,
+)
 
 DEFAULT_DESCRIPTOR = os.path.join(PROJECT_ROOT, "json_reduction", "descriptor_schema.json")
 
@@ -76,6 +84,26 @@ def parse_args() -> argparse.Namespace:
         help="Skip the final executive-summary synthesis pass (section-by-section mode only).",
     )
     parser.add_argument(
+        "--think",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use the model's native thinking mode; reasoning is printed to the terminal "
+             "(not saved) and kept out of the interpretation. On by default; --no-think disables it (faster).",
+    )
+    parser.add_argument(
+        "--prompt",
+        default=None,
+        help="Extra instruction appended to the system prompt for every section.",
+    )
+    parser.add_argument("--temperature", type=float, default=None,
+                        help="Sampling temperature (model default if unset; gemma4 defaults to 1).")
+    parser.add_argument("--top_p", type=float, default=None, help="Nucleus sampling top_p.")
+    parser.add_argument("--top_k", type=int, default=None, help="Top-k sampling.")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Sampling seed for reproducible runs.")
+    parser.add_argument("--num_predict", type=int, default=None,
+                        help="Max tokens to generate per call (model default if unset).")
+    parser.add_argument(
         "--check",
         action="store_true",
         help="Run environment preflight checks (Ollama, models, ToolUniverse, schema) and exit.",
@@ -125,6 +153,9 @@ def run_pipeline(
     whole_report: bool = False,
     enrich: bool = False,
     synthesize_final: bool = True,
+    think: bool = True,
+    gen_options: dict = None,
+    user_instruction: str = "",
 ) -> str:
     input_path = resolve_input_path(input_json)
     print(f"[pipeline] Loading raw JSON: {input_path}")
@@ -152,10 +183,12 @@ def run_pipeline(
 
     if whole_report:
         prompt = build_prompt(report)
+        system = SYSTEM_PROMPT + enrichment + build_user_instruction(user_instruction)
         print(f"[pipeline] Calling Ollama model '{model}' (whole report)...")
-        response = call_ollama(
-            prompt, model=model, system=SYSTEM_PROMPT + enrichment, num_ctx=num_ctx
+        response, thinking = call_ollama(
+            prompt, model=model, system=system, num_ctx=num_ctx, think=think, gen_options=gen_options
         )
+        print_thinking("Whole report", thinking)
     else:
         print(f"[pipeline] Calling Ollama model '{model}' (section-by-section)...")
         response = interpret_per_section(
@@ -164,6 +197,9 @@ def run_pipeline(
             num_ctx=num_ctx,
             extra_system_context=enrichment,
             synthesize_final=synthesize_final,
+            think=think,
+            gen_options=gen_options,
+            user_instruction=user_instruction,
         )
 
     if output_path is None:
@@ -183,6 +219,10 @@ def main() -> None:
         return
 
     args = parse_args()
+    gen_options = build_gen_options(
+        temperature=args.temperature, top_p=args.top_p, top_k=args.top_k,
+        seed=args.seed, num_predict=args.num_predict,
+    )
     final_path = run_pipeline(
         input_json=args.input,
         descriptor_path=args.descriptor,
@@ -194,6 +234,9 @@ def main() -> None:
         whole_report=args.whole_report,
         enrich=args.enrich,
         synthesize_final=not args.no_synthesis,
+        think=args.think,
+        gen_options=gen_options,
+        user_instruction=args.prompt,
     )
     print(f"[pipeline] Completed. Final report: {final_path}")
 
