@@ -181,8 +181,13 @@ def synthesize_sections(
     model: str,
     num_ctx: int = 32768,
     samplesheet_context: str = "",
-) -> str:
-    """Run a final Ollama call that condenses per-section analyses into a summary."""
+    think: bool = True,
+    gen_options: dict = None,
+) -> tuple:
+    """Run a final Ollama call that condenses per-section analyses into a summary.
+
+    Returns ``(content, thinking)`` — see :func:`chat_ollama`.
+    """
     combined = "\n\n".join(f"### {name}\n{text.strip()}" for name, text in responses)
     prompt = (
         "Here are the per-section analyses of one MultiQC spatial transcriptomics report. "
@@ -194,6 +199,8 @@ def synthesize_sections(
         model=model,
         system=SYNTHESIS_SYSTEM_PROMPT + samplesheet_context,
         num_ctx=num_ctx,
+        think=think,
+        gen_options=gen_options,
     )
 
 
@@ -213,11 +220,20 @@ def combine_responses(responses: list, summary: str = None) -> str:
     """
     parts = ["# MultiQC Spatial Transcriptomics Interpretation\n"]
     if summary:
-        parts.append(f"\n## Executive Summary\n\n{_strip_leading_heading(summary)}\n")
+        parts.append(f"\n## Overview\n\n{_strip_leading_heading(summary)}\n")
         parts.append("\n---\n\n## Per-section detail\n")
     for name, text in responses:
         parts.append(f"\n## {name}\n\n{text.strip()}\n")
     return "\n".join(parts)
+
+
+def print_thinking(label: str, thinking: str) -> None:
+    """Print the model's chain-of-thought to the terminal (it is not saved anywhere)."""
+    if not thinking:
+        return
+    print(f"\n[think] ===== {label} =====")
+    print(thinking.strip())
+    print(f"[think] ===== end {label} =====\n")
 
 
 def interpret_per_section(
@@ -226,34 +242,46 @@ def interpret_per_section(
     num_ctx: int = 32768,
     extra_system_context: str = "",
     synthesize_final: bool = True,
+    think: bool = True,
+    gen_options: dict = None,
+    user_instruction: str = "",
 ) -> str:
     """Analyse each major section in its own Ollama call, then combine the results.
 
-    The sample sheet and any ``extra_system_context`` (e.g. ToolUniverse gene
-    enrichment) are placed in the persistent system prompt so every per-section
-    call shares that grounding. When ``synthesize_final`` is set, a final call
-    condenses the per-section analyses into an executive summary placed up front.
-    Returns the combined markdown document.
+    The sample sheet, any ``extra_system_context`` (e.g. ToolUniverse gene
+    enrichment), and any ``user_instruction`` are placed in the persistent system
+    prompt so every per-section call shares that context. When ``synthesize_final``
+    is set, a final call condenses the per-section analyses into an executive summary
+    placed up front. ``think`` lets the model reason internally before answering; that
+    reasoning is printed to the terminal but kept OUT of the saved interpretation.
+    Returns the combined markdown document (answers only).
     """
     samplesheet_context = build_samplesheet_context(report)
-    system = SYSTEM_PROMPT + samplesheet_context + extra_system_context
+    system = SYSTEM_PROMPT + samplesheet_context + extra_system_context + build_user_instruction(user_instruction)
 
     # Resolve the model once
     model = ensure_model(model)
 
     responses = []
     sections = list(iter_analysis_sections(report))
-    print(f"[interpret] Analyzing {len(sections)} sections one-by-one with model '{model}'.")
+    print(f"[interpret] Analyzing {len(sections)} sections one-by-one with model '{model}'"
+          f"{' (thinking)' if think else ''}.")
     for name, section_obj in sections:
         print(f"[interpret]   -> {name}")
         prompt = build_section_prompt(name, section_obj)
-        text = chat_ollama(prompt, model=model, system=system, num_ctx=num_ctx)
-        responses.append((name, text))
+        content, thinking = chat_ollama(
+            prompt, model=model, system=system, num_ctx=num_ctx, think=think, gen_options=gen_options
+        )
+        print_thinking(name, thinking)
+        responses.append((name, content))
 
     summary = None
     if synthesize_final and responses:
         print("[interpret] Synthesizing executive summary from per-section analyses...")
-        summary = synthesize_sections(responses, model, num_ctx, samplesheet_context)
+        summary, summary_thinking = synthesize_sections(
+            responses, model, num_ctx, samplesheet_context, think=think, gen_options=gen_options
+        )
+        print_thinking("Overview (synthesis)", summary_thinking)
 
     return combine_responses(responses, summary)
 
@@ -403,25 +431,86 @@ def ensure_model(model: str) -> str:
     return model
 
 
-def chat_ollama(prompt: str, model: str, system: str = SYSTEM_PROMPT, num_ctx: int = 32768) -> str:
-    """Send one prompt to an already-resolved Ollama model and return the text."""
+def build_gen_options(
+    temperature: float = None,
+    top_p: float = None,
+    top_k: int = None,
+    seed: int = None,
+    num_predict: int = None,
+) -> dict:
+    """Collect the optional Ollama sampling knobs into a dict, omitting unset ones.
+
+    Anything left as None is not sent, so the model's own defaults apply.
+    """
+    opts = {}
+    if temperature is not None:
+        opts["temperature"] = temperature
+    if top_p is not None:
+        opts["top_p"] = top_p
+    if top_k is not None:
+        opts["top_k"] = top_k
+    if seed is not None:
+        opts["seed"] = seed
+    if num_predict is not None:
+        opts["num_predict"] = num_predict
+    return opts
+
+
+def build_user_instruction(text: str) -> str:
+    """Wrap a user-supplied instruction so it can be appended to the system prompt."""
+    if not text:
+        return ""
+    return f"\n\n--- ADDITIONAL USER INSTRUCTIONS ---\n{text.strip()}"
+
+
+def chat_ollama(
+    prompt: str,
+    model: str,
+    system: str = SYSTEM_PROMPT,
+    num_ctx: int = 32768,
+    think: bool = True,
+    gen_options: dict = None,
+) -> tuple:
+    """Send one prompt to an already-resolved Ollama model.
+
+    Returns ``(content, thinking)``. When ``think`` is True (and the model
+    supports native thinking, like gemma4), Ollama separates the chain-of-thought
+    into ``message.thinking``; ``content`` is always the final answer. ``thinking``
+    is "" when thinking is off or the model produced none. ``gen_options`` carries
+    optional sampling knobs (temperature, seed, ...) merged on top of ``num_ctx``.
+    """
+    options = {"num_ctx": num_ctx}
+    if gen_options:
+        options.update(gen_options)
     response = ollama.chat(
         model=model,
         messages=[
             {"role": "system", "content": system},
             {"role": "user",   "content": prompt},
         ],
-        options={"num_ctx": num_ctx},
+        options=options,
+        think=think,
     )
-    return response["message"]["content"]
+    message = response["message"]
+    return message.get("content", ""), (message.get("thinking") or "")
 
 
-def call_ollama(prompt: str, model: str, system: str = SYSTEM_PROMPT, num_ctx: int = 32768) -> str:
-    """Resolve the model (prompting if needed) and send a single prompt."""
+def call_ollama(
+    prompt: str,
+    model: str,
+    system: str = SYSTEM_PROMPT,
+    num_ctx: int = 32768,
+    think: bool = True,
+    gen_options: dict = None,
+) -> tuple:
+    """Resolve the model (prompting if needed) and send a single prompt.
+
+    Returns ``(content, thinking)`` — see :func:`chat_ollama`.
+    """
     print(f"[interpret] Preparing to call model '{model}' via Ollama with num_ctx={num_ctx}...")
     model = ensure_model(model)
     print(f"[interpret] Calling model '{model}' via Ollama...")
-    return chat_ollama(prompt, model=model, system=system, num_ctx=num_ctx)
+    return chat_ollama(prompt, model=model, system=system, num_ctx=num_ctx, think=think, gen_options=gen_options)
 
 
 def load_report(path: str) -> dict:
@@ -478,6 +567,27 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip the final executive-summary synthesis pass (section-by-section mode only).",
     )
+    parser.add_argument(
+        "--think",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use the model's native thinking mode; the reasoning is printed to the terminal "
+             "(not saved) and kept out of the interpretation. On by default; --no-think disables it (faster).",
+    )
+    parser.add_argument(
+        "--prompt",
+        default=None,
+        help="Extra instruction appended to the system prompt for every section "
+             "(e.g. 'Focus on immune cell types' or 'Answer in bullet points').",
+    )
+    parser.add_argument("--temperature", type=float, default=None,
+                        help="Sampling temperature (model default if unset; gemma4 defaults to 1).")
+    parser.add_argument("--top_p", type=float, default=None, help="Nucleus sampling top_p.")
+    parser.add_argument("--top_k", type=int, default=None, help="Top-k sampling.")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Sampling seed for reproducible runs.")
+    parser.add_argument("--num_predict", type=int, default=None,
+                        help="Max tokens to generate per call (model default if unset).")
     return parser.parse_args()
 
 
@@ -508,12 +618,19 @@ def main() -> None:
     print(f"[interpret] Loaded {section_count} data sections.")
 
     enrichment = _build_enrichment_context(report, args.enrich)
+    gen_options = build_gen_options(
+        temperature=args.temperature, top_p=args.top_p, top_k=args.top_k,
+        seed=args.seed, num_predict=args.num_predict,
+    )
 
     if args.whole_report:
         prompt = build_prompt(report)
-        response_text = call_ollama(
-            prompt, model=args.model, system=SYSTEM_PROMPT + enrichment, num_ctx=args.num_ctx
+        system = SYSTEM_PROMPT + enrichment + build_user_instruction(args.prompt)
+        response_text, thinking = call_ollama(
+            prompt, model=args.model, system=system,
+            num_ctx=args.num_ctx, think=args.think, gen_options=gen_options,
         )
+        print_thinking("Whole report", thinking)
     else:
         response_text = interpret_per_section(
             report,
@@ -521,6 +638,9 @@ def main() -> None:
             num_ctx=args.num_ctx,
             extra_system_context=enrichment,
             synthesize_final=not args.no_synthesis,
+            think=args.think,
+            gen_options=gen_options,
+            user_instruction=args.prompt,
         )
 
     save_output(response_text, args.output)
