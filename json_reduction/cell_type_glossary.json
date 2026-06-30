@@ -1,0 +1,22 @@
+{
+  "TNK": "T cells and NK (natural killer) cells (a combined T/NK lymphocyte population)",
+  "CYCLING TNK": "proliferating (cycling) T and NK cells",
+  "PDAC": "pancreatic ductal adenocarcinoma cells (the malignant tumor epithelial cells)",
+  "FIBROBLASTS": "fibroblasts (stromal connective-tissue cells; cancer-associated fibroblasts in a tumor context)",
+  "MYELOID": "myeloid-lineage immune cells (e.g. macrophages, monocytes, dendritic cells, granulocytes)",
+  "CYCLING MYELOID": "proliferating (cycling) myeloid cells",
+  "CYCLING. MYELOID": "proliferating (cycling) myeloid cells",
+  "ENDOTHELIAL": "endothelial cells (cells lining blood and lymphatic vessels)",
+  "PERICYTES": "pericytes (perivascular support cells that wrap capillaries)",
+  "ENDOCRINE": "endocrine cells (hormone-secreting cells; pancreatic islet cells in this tissue)",
+  "ACINAR": "acinar cells (exocrine pancreatic cells that secrete digestive enzymes)",
+  "B CELLS": "B lymphocytes (antibody-producing adaptive immune cells)",
+  "PLASMA": "plasma cells (terminally differentiated, antibody-secreting B cells)",
+  "MAST": "mast cells (granulocytic immune cells involved in inflammation)",
+  "NA": "not assigned - spots with no valid neighborhood or cell-type assignment",
+  "unknown": "cells or spots with no confident cell-type assignment",
+  "type B pancreatic cell": "insulin-producing beta cell of the pancreatic islet",
+  "type A enteroendocrine cell": "glucagon-producing alpha cell of the pancreatic islet",
+  "pancreatic ductal cell": "epithelial cell lining the pancreatic ducts",
+  "acinar cell": "exocrine pancreatic cell that secretes digestive enzymes"
+}

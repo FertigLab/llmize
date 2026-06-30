@@ -14,7 +14,7 @@ if PROJECT_ROOT not in sys.path:
 from json_reduction.json_load import resolve_path, load_json, DATA_DIR
 from json_reduction.json_clean import extract_report_saved_raw_data
 from json_reduction.json_write import save_json
-from json_reduction.json_merger import merge
+from json_reduction.json_merger import merge, extract_focal_labels
 from interpret import (
     build_prompt,
     call_ollama,
@@ -22,6 +22,8 @@ from interpret import (
     print_thinking,
     build_gen_options,
     build_user_instruction,
+    build_glossary_context,
+    build_run_footer,
     SYSTEM_PROMPT,
 )
 
@@ -170,11 +172,16 @@ def run_pipeline(
 
     if annotated_filename is None:
         annotated_filename = "annotated_report.json"
+    # Recover real focal cell types from the raw report's plot metadata.
+    focal_labels = extract_focal_labels(data)
+    if focal_labels:
+        print(f"[pipeline] Recovered spatial-neighbors focal cell types: {focal_labels}")
     annotated_path = merge(
         data_path=extracted_path,
         descriptor_path=descriptor_path,
         output_dir=DATA_DIR,
         output_filename=annotated_filename,
+        focal_labels=focal_labels,
     )
     print(f"[pipeline] Annotated report saved: {annotated_path}")
 
@@ -183,7 +190,8 @@ def run_pipeline(
 
     if whole_report:
         prompt = build_prompt(report)
-        system = SYSTEM_PROMPT + enrichment + build_user_instruction(user_instruction)
+        system = (SYSTEM_PROMPT + enrichment + build_glossary_context(report)
+                  + build_user_instruction(user_instruction))
         print(f"[pipeline] Calling Ollama model '{model}' (whole report)...")
         response, thinking = call_ollama(
             prompt, model=model, system=system, num_ctx=num_ctx, think=think, gen_options=gen_options
@@ -208,7 +216,12 @@ def run_pipeline(
         output_filename = f"{stem}_interpretation_{timestamp}.md"
         output_path = os.path.join(DATA_DIR, output_filename)
 
-    save_text(response, output_path)
+    footer = build_run_footer(
+        model=model, num_ctx=num_ctx, think=think, gen_options=gen_options,
+        mode="whole-report" if whole_report else "section-by-section",
+        enrich=enrich, user_instruction=user_instruction, input_path=input_path,
+    )
+    save_text(response + footer, output_path)
     return output_path
 
 

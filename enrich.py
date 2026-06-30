@@ -1,21 +1,5 @@
-"""ToolUniverse-based biological context enrichment for annotated MultiQC reports.
-
-The annotated report is full of concrete biological entities a local Ollama model
-often does not know well: gene symbols (CXCL14, HLA-DRB1, MIF), ligand-receptor
-pairs (MIF-CD74) and cell types. This module:
-
-  1. Extracts those entities from the annotated report.
-  2. Looks up authoritative gene/protein annotations via ToolUniverse
-     (https://github.com/mims-harvard/ToolUniverse), an interface over 1000+
-     biomedical tools (UniProt, Open Targets, PubMed, ...).
-  3. Returns a compact markdown "reference block" that is prepended to the
-     system prompt so every interpretation call is grounded in real biology.
-
-Everything degrades gracefully: if `tooluniverse` is not installed, or a tool
-call fails / times out, enrichment is skipped and the pipeline still runs.
-Successful lookups are cached on disk so repeat runs do not re-hit the APIs.
-
-Run standalone to inspect what would be extracted / enriched:
+"""ToolUniverse gene enrichment: extract entities, look up annotations, build a
+reference block for the system prompt. Optional, cached, and fail-safe.
 
     python3 enrich.py --input data/annotated_report.json
 """
@@ -37,7 +21,7 @@ GENE_TOOL_CANDIDATES = [
     "get_target_synonyms_by_ensemblID",
 ]
 
-# Argument name the gene tool expects 
+# Argument name the gene tool expects.
 GENE_TOOL_ARG = "targetName"
 
 def _collect_cell_types(report: dict) -> set:

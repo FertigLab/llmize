@@ -60,7 +60,8 @@
     "description": "Moran's I spatial autocorrelation scores per gene. Mean interaction across samples, shown when no differential interactions were found between sample groups.",
     "structure": "sample_id to { GENE-I: score }",
     "key_format": "GENE_NAME-I (example: 'CXCL14-I', 'HLA-DRB1-I')",
-    "value_type": "float, range 0-1 - higher = expression more spatially clustered across tissue spots"
+    "value_type": "float, range 0-1 - higher = expression more spatially clustered across tissue spots",
+    "analysis_instructions": "Assess whether spatial clustering differs systematically between responders and non-responders. If there is no clear, consistent group-level difference, state that plainly (e.g. 'Moran's I scores do not differ systematically between response groups') and do NOT enumerate per-sample scores gene by gene. Name only the few genes (if any) with a notable and consistent group difference, and otherwise describe the overall pattern briefly."
   },
   "multiqc_spatial_neighbors": {
     "description": "Cell type immediate neighborhood across samples. Each section (multiqc_spatial_neighbors, _1, _2, ...) represents one focal cell type and counts how many neighbors of each type surround it. Focal cell types are dynamically generated during merge based on actual data.",

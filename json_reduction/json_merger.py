@@ -8,37 +8,65 @@ def req_annotated_filename() -> str:
     return user_input if user_input else default
 
 
-def _get_focal_cell_types(data):
-    """Extract focal cell types from actual spatial neighbor data."""
+def _section_index(section_name):
+    """Numeric index of a spatial-neighbors section: '...neighbors' -> 0, '..._1' -> 1, etc."""
+    suffix = section_name.split("multiqc_spatial_neighbors")[-1]
+    if suffix.startswith("_") and suffix[1:].isdigit():
+        return int(suffix[1:])
+    return 0
+
+
+def extract_focal_labels(full_data):
+    """Recover ordered focal cell-type names from the spatial-neighbors plot metadata."""
+    plot_data = full_data.get("report_plot_data", {})
+    if not isinstance(plot_data, dict):
+        return []
+
+    plot = next(
+        (v for k, v in plot_data.items()
+         if "spatial_neighbor" in k.lower() and isinstance(v, dict)),
+        None,
+    )
+    if not plot:
+        return []
+
+    names = []
+    for item in plot.get("pconfig", {}).get("data_labels", []) or []:
+        if isinstance(item, str):
+            names.append(item)
+        elif isinstance(item, dict) and (item.get("name") or item.get("label")):
+            names.append(item.get("name") or item.get("label"))
+    if names:
+        return names
+
+    # Fallback: dataset-level labels.
+    for ds in plot.get("datasets", []) or []:
+        if isinstance(ds, dict) and ds.get("label"):
+            names.append(ds["label"])
+    return names
+
+
+def _get_focal_cell_types(data, focal_labels=None):
+    """Map each spatial-neighbors section to its focal cell type; unlabeled if unknown."""
+    focal_labels = focal_labels or []
     focal_types = {}
     spatial_sections = sorted(
         [k for k in data.keys() if "spatial_neighbors" in k],
-        key=lambda x: (x, int(x.split("_")[-1]) if "_" in x and x.split("_")[-1].isdigit() else -1)
+        key=_section_index,
     )
-    
+
     for idx, section in enumerate(spatial_sections):
-        focal_types[section] = {
-            "index": idx,
-            "focal_cell_type": _infer_focal_cell_type(section, idx)
-        }
-    
+        if idx < len(focal_labels):
+            label = focal_labels[idx]
+        else:
+            label = f"focal cell type {idx + 1} (unlabeled)"
+        focal_types[section] = {"index": idx, "focal_cell_type": label}
+
     return focal_types
 
 
-def _infer_focal_cell_type(section_name, index):
-    """Infer focal cell type from section structure. Can be overridden by descriptor if available."""
-    inferred_types = {
-        "multiqc_spatial_neighbors": "type B pancreatic cell",
-        "multiqc_spatial_neighbors_1": "type A enteroendocrine cell",
-        "multiqc_spatial_neighbors_2": "acinar cell",
-        "multiqc_spatial_neighbors_3": "pancreatic ductal cell",
-        "multiqc_spatial_neighbors_4": "NA",
-        "multiqc_spatial_neighbors_5": "unknown",
-    }
-    return inferred_types.get(section_name, "unknown")
-
-
-def merge(data_path, descriptor_path, output_dir, output_filename="annotated_report.json"):
+def merge(data_path, descriptor_path, output_dir, output_filename="annotated_report.json",
+          focal_labels=None):
 
     with open(data_path, encoding="utf-8") as f:
         data = json.load(f)
@@ -57,7 +85,7 @@ def merge(data_path, descriptor_path, output_dir, output_filename="annotated_rep
         )
 
     raw = data[top_key]
-    focal_cell_types = _get_focal_cell_types(raw)
+    focal_cell_types = _get_focal_cell_types(raw, focal_labels=focal_labels)
     annotated = {}
     spatial_neighbors_parent = None
     spatial_children = {}
