@@ -25,9 +25,8 @@ source .venv/bin/activate
 python3 -m pip install -r requirements.txt
 ```
 
-This installs `ollama` plus the optional enrich stack
-(`tooluniverse`, `PyYAML`). Enrich is optional, the pipeline can run without
-it but enrich gives more context.
+This installs `ollama` plus the optional enrich stack (`tooluniverse`, `PyYAML`).
+Enrich is optional, the pipeline can run withoutit but enrich gives more context.
 
 ### 3. Run the pipeline
 ```bash
