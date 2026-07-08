@@ -24,6 +24,7 @@ from interpret import (
     build_user_instruction,
     build_glossary_context,
     build_run_footer,
+    review_interpretation,
     SYSTEM_PROMPT,
 )
 
@@ -41,8 +42,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--model", "-m",
-        default="gemma4",
-        help="Ollama model name to use (default: gemma4).",
+        default=os.environ.get("LLMIZE_MODEL", "gemma4"),
+        help="Ollama model name to use. Defaults to $LLMIZE_MODEL, else gemma4. "
+             "In the Docker image, boot pulls the same $LLMIZE_MODEL, so setting the env "
+             "var alone keeps boot and the pipeline in sync.",
     )
     parser.add_argument(
         "--descriptor",
@@ -84,6 +87,18 @@ def parse_args() -> argparse.Namespace:
         "--no-synthesis",
         action="store_true",
         help="Skip the final executive-summary synthesis pass (section-by-section mode only).",
+    )
+    parser.add_argument(
+        "--review",
+        action="store_true",
+        help="Run a capped self-review of the interpretation, driven by a deterministic "
+             "check for gene/cell-type symbols that do not appear in the report data.",
+    )
+    parser.add_argument(
+        "--review-passes",
+        type=int,
+        default=2,
+        help="Maximum number of review passes when --review is set (default: 2).",
     )
     parser.add_argument(
         "--think",
@@ -158,6 +173,8 @@ def run_pipeline(
     think: bool = True,
     gen_options: dict = None,
     user_instruction: str = "",
+    review: bool = False,
+    review_passes: int = 2,
 ) -> str:
     input_path = resolve_input_path(input_json)
     print(f"[pipeline] Loading raw JSON: {input_path}")
@@ -210,6 +227,13 @@ def run_pipeline(
             user_instruction=user_instruction,
         )
 
+    if review:
+        print(f"[pipeline] Reviewing interpretation (up to {review_passes} pass(es))...")
+        response = review_interpretation(
+            response, model=model, report=report, num_ctx=num_ctx,
+            passes=review_passes, think=think, gen_options=gen_options,
+        )
+
     if output_path is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         stem = os.path.splitext(os.path.basename(input_path))[0]
@@ -250,6 +274,8 @@ def main() -> None:
         think=args.think,
         gen_options=gen_options,
         user_instruction=args.prompt,
+        review=args.review,
+        review_passes=args.review_passes,
     )
     print(f"[pipeline] Completed. Final report: {final_path}")
 
