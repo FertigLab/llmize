@@ -1,13 +1,13 @@
 {
   "multiqc_samplesheet": {
-    "description": "The sample sheet provided as input to the pipeline. Contains per-sample metadata. Only the response label is relevant for analysis; file paths (data_directory, expression_profile) are excluded.",
+    "description": "The sample sheet provided as input to the pipeline. Contains per-sample metadata columns. Columns containing file paths (data_directory, expression_profile) are excluded.",
     "structure": "sample_id to { metadata fields }",
     "properties": {
       "responce": "Treatment response label (example: responder / non-responder)."
     }
   },
   "multiqc_atlas": {
-    "description": "Summary of the cells and genes in the reference atlas. If the same atlas is used for multiple samples, table rows will be repeated.",
+    "description": "Summary of the cells and genes in the reference atlas. Transcription profiles from the reference atlas are used to infer cell types in the samples.",
     "structure": "atlas_id to { QC metrics }",
     "properties": {
       "n_genes": "Total unique genes in the atlas.",
@@ -19,13 +19,13 @@
     }
   },
   "multiqc_atlas_ct": {
-    "description": "Summary of the cell types in the atlas. Values are raw cell counts per type.",
+    "description": "Summary of the cell types in the reference atlas. Values are raw cell counts per type. Cell transcriptional profiles from the reference atlas are used to infer cell types in the samples.",
     "structure": "atlas_id to { cell_type_name: count }",
-    "key_type": "Cell type names (example: 'acinar cell', 'type B pancreatic cell'). 'unknown' = unassigned cells.",
+    "key_type": "Cell type names (example: 'acinar cell', 'type B pancreatic cell'). 'unknown', 'NA' = unassigned cells.",
     "value_type": "integer - raw cell count per type"
   },
   "multiqc_adata": {
-    "description": "Summary of the AnnData object right after it was read. Represents the input tissue sample before any processing.",
+    "description": "Summary of the sample AnnData object right after it was read. Represents the input tissue sample before any processing. Low non-zero expression counts (<100) or high percent mitochondrial counts (>20%) may indicate low-quality spots.",
     "structure": "sample_id to { QC metrics }",
     "properties": {
       "n_genes": "Total unique genes in the sample.",
@@ -39,7 +39,7 @@
   "multiqc_deconvolved_ct": {
     "description": "Assigned cell types based on deconvolution / cell typing results. Values are spot counts per assigned type.",
     "structure": "sample_id to { cell_type_name: count }",
-    "key_type": "Cell type names. 'unknown' = spots with no confident assignment.",
+    "key_type": "Cell type names. 'unknown', 'NA', or empty column names = spots with no confident assignment.",
     "value_type": "integer - number of spots assigned to each cell type"
   },
   "multiqc_deconvolved_probs": {
@@ -49,15 +49,16 @@
     "value_type": "float, range 0-1 - higher = more confident assignment"
   },
   "multiqc_squidpy_ligrec_interactions": {
-    "description": "Squidpy ligand-receptor interaction scores. Mean interaction across samples, shown when no differential interactions were found between sample groups.",
+    "description": "Squidpy ligand-receptor interaction scores. This is always a pre-filtered report. Mean interaction across samples are shown when no differential interactions were found between sample groups, otherwise the most contrasting once are shown.",
     "structure": "sample_id to { interaction_key: score }",
-    "key_format": "LIGAND-RECEPTOR | Sender_cell_type -> Receiver_cell_type",
+    "key_format": "LIGAND-RECEPTOR-Sender_cell_type-Receiver_cell_type",
     "key_example": "'MIF-CD74-type B pancreatic cell-type A enteroendocrine cell' = MIF (ligand) binding CD74 (receptor), type B pancreatic cell sending to type A enteroendocrine cell.",
     "value_type": "float - mean interaction score; higher = stronger interaction",
-    "note": "Some gene names contain hyphens (example: HLA-C, HLA-DRA), so the key cannot be split on hyphens alone."
+    "note": "Some gene names contain hyphens (example: HLA-C, HLA-DRA), so the key cannot be split on hyphens alone.",
+    "analysis_instructions": "Look for top differences in interaction scores across metadata groups, top similarities across groups, but also the frequency of ligands and receptors."
   },
   "multiqc_Moran_I_interactions": {
-    "description": "Moran's I spatial autocorrelation scores per gene. Mean interaction across samples, shown when no differential interactions were found between sample groups.",
+    "description": "Moran's I spatial autocorrelation scores per gene. This is always a pre-filtered report. Mean interaction across samples are shown when no differential interactions were found between sample groups, otherwise the most contrasting ones are shown.",
     "structure": "sample_id to { GENE-I: score }",
     "key_format": "GENE_NAME-I (example: 'CXCL14-I', 'HLA-DRB1-I')",
     "value_type": "float, range 0-1 - higher = expression more spatially clustered across tissue spots",
@@ -67,6 +68,7 @@
     "description": "Cell type immediate neighborhood across samples. Each section (multiqc_spatial_neighbors, _1, _2, ...) represents one focal cell type and counts how many neighbors of each type surround it. Focal cell types are dynamically generated during merge based on actual data.",
     "structure": "sample_id to { neighbor_cell_type: count }",
     "key_type": "Cell type names. 'NA' = spots with no valid neighborhood assignment.",
-    "value_type": "float - number of immediate neighbors of that cell type"
+    "value_type": "float - number of immediate neighbors of that cell type",
+    "analysis_instructions": "Compare groups for difference and similarities. Also estimate mean neighborhood frequency without 'self' neighbours, this way the border of cell type clusters can be assessed."
   }
 }
