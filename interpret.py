@@ -390,10 +390,13 @@ def build_review_prompt(text: str, findings: list) -> str:
         "functions."
     ]
     if findings:
-        joined = ", ".join(findings)
+        max_listed = 50
+        joined = ", ".join(findings[:max_listed])
+        more = len(findings) - max_listed
+        suffix = f" (and {more} more)" if more > 0 else ""
         parts.append(
             "These gene or cell-type symbols appear in the text but are absent from the "
-            f"report data. Remove them or correct the surrounding claim: {joined}."
+            f"report data. Remove them or correct the surrounding claim: {joined}{suffix}."
         )
     parts.append("Return only the corrected interpretation, preserving its markdown structure.")
     parts.append("\n---\n\n" + text)
