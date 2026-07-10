@@ -410,8 +410,15 @@ def review_interpretation(text, model, report, num_ctx=32768, passes=2,
             print(f"[review] pass {i + 1}: {len(findings)} unsupported symbol(s): {', '.join(findings)}")
         else:
             print(f"[review] pass {i + 1}: no unsupported symbols detected; evidence and consistency review")
+        from enrich import extract_entities
+        entities = extract_entities(report, max_genes=50)
+        review_prompt = (
+            "Deterministic entities extracted from the report (use these as the allowed symbol set):\n"
+            f"```json\n{json.dumps(entities, indent=2)}\n```\n\n"
+            + build_review_prompt(text, findings)
+        )
         text, thinking = chat_ollama(
-            build_review_prompt(text, findings),
+            review_prompt,
             model=model,
             system=REVIEW_SYSTEM_PROMPT,
             num_ctx=num_ctx,
