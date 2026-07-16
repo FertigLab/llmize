@@ -18,3 +18,10 @@ data/annotated_report.json
 data/enrichment_cache.json
 data/*.log
 res.txt
+
+# Nextflow run artifacts
+.nextflow/
+.nextflow.log*
+data/nextflow_logs/.nextflow.log*
+work/
+results/

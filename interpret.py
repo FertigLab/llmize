@@ -6,9 +6,12 @@ import os
 import sys
 import statistics
 import subprocess
+import time
 from datetime import datetime
 
 import ollama
+
+from verify import deterministic_findings
 
 
 # Prompt builder
@@ -383,6 +386,59 @@ def combine_responses(responses: list, summary: str = None) -> str:
     return "\n".join(parts)
 
 
+REVIEW_SYSTEM_PROMPT = """You are an expert bioinformatician reviewing a spatial transcriptomics interpretation for factual grounding and internal consistency. Correct statements that are not supported by the underlying report data, remove claims about genes, proteins, or cell types that do not appear in the data, and resolve contradictions between sections. Preserve the document's headings, tables, and structure. Do not add new findings and do not soften the removal of unsupported claims. Output only the corrected document, with no preamble.""" + STYLE_GUIDE + EVIDENCE_RULES
+
+
+def build_review_prompt(text: str, findings: list) -> str:
+    parts = [
+        "Review the spatial transcriptomics interpretation below. Correct any statement "
+        "that is not supported by the report data, and resolve any internal contradiction "
+        "between sections. Do not introduce new claims, and do not invent gene or protein "
+        "functions."
+    ]
+    if findings:
+        max_listed = 50
+        joined = ", ".join(findings[:max_listed])
+        more = len(findings) - max_listed
+        suffix = f" (and {more} more)" if more > 0 else ""
+        parts.append(
+            "These gene or cell-type symbols appear in the text but are absent from the "
+            f"report data. Remove them or correct the surrounding claim: {joined}{suffix}."
+        )
+    parts.append("Return only the corrected interpretation, preserving its markdown structure.")
+    parts.append("\n---\n\n" + text)
+    return "\n\n".join(parts)
+
+
+def review_interpretation(text, model, report, num_ctx=32768, passes=2,
+                          think=True, gen_options=None):
+    for i in range(max(1, passes)):
+        findings = deterministic_findings(text, report)
+        if i > 0 and not findings:
+            break
+        if findings:
+            print(f"[review] pass {i + 1}: {len(findings)} unsupported symbol(s): {', '.join(findings)}")
+        else:
+            print(f"[review] pass {i + 1}: no unsupported symbols detected; evidence and consistency review")
+        from enrich import extract_entities
+        entities = extract_entities(report, max_genes=50)
+        review_prompt = (
+            "Deterministic entities extracted from the report (use these as the allowed symbol set):\n"
+            f"```json\n{json.dumps(entities, indent=2)}\n```\n\n"
+            + build_review_prompt(text, findings)
+        )
+        text, thinking = chat_ollama(
+            review_prompt,
+            model=model,
+            system=REVIEW_SYSTEM_PROMPT,
+            num_ctx=num_ctx,
+            think=think,
+            gen_options=gen_options,
+        )
+        print_thinking(f"Review pass {i + 1}", thinking)
+    return text
+
+
 def print_thinking(label: str, thinking: str) -> None:
     """Print the model's chain-of-thought to the terminal (it is not saved anywhere)."""
     if not thinking:
@@ -414,23 +470,29 @@ def interpret_per_section(
 
     responses = []
     sections = list(iter_analysis_sections(report))
-    print(f"[interpret] Analyzing {len(sections)} sections one-by-one with model '{model}'"
-          f"{' (thinking)' if think else ''}.")
-    for name, section_obj in sections:
-        print(f"[interpret]   -> {name}")
+    total = len(sections)
+    print(f"[interpret] Analyzing {total} sections one-by-one with model '{model}'"
+          f"{' (thinking)' if think else ''}.", flush=True)
+    for idx, (name, section_obj) in enumerate(sections, 1):
+        print(f"[interpret]   [{idx}/{total}] -> {name}", flush=True)
+        started = time.monotonic()
         prompt = build_section_prompt(name, section_obj, groups=groups)
         content, thinking = chat_ollama(
             prompt, model=model, system=system, num_ctx=num_ctx, think=think, gen_options=gen_options
         )
+        elapsed = time.monotonic() - started
+        print(f"[interpret]   [{idx}/{total}] {name} done in {elapsed:.1f}s", flush=True)
         print_thinking(name, thinking)
         responses.append((name, content))
 
     summary = None
     if synthesize_final and responses:
-        print("[interpret] Synthesizing executive summary from per-section analyses...")
+        print("[interpret] Synthesizing executive summary from per-section analyses...", flush=True)
+        started = time.monotonic()
         summary, summary_thinking = synthesize_sections(
             responses, model, num_ctx, samplesheet_context, think=think, gen_options=gen_options
         )
+        print(f"[interpret] Synthesis done in {time.monotonic() - started:.1f}s", flush=True)
         print_thinking("Overview (synthesis)", summary_thinking)
 
     return combine_responses(responses, summary)
