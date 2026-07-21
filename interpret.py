@@ -10,7 +10,7 @@ from datetime import datetime
 
 import ollama
 
-from verify import deterministic_findings
+from verify import deterministic_findings, extract_entities
 
 SAMPLESHEET_KEY = "multiqc_samplesheet"
 
@@ -431,7 +431,6 @@ def review_interpretation(text, model, report, num_ctx=32768, passes=2,
             print(f"[review] pass {i + 1}: {len(findings)} unsupported symbol(s): {', '.join(findings)}")
         else:
             print(f"[review] pass {i + 1}: no unsupported symbols detected; evidence and consistency review")
-        from enrich import extract_entities
         entities = extract_entities(report, max_genes=50)
         review_prompt = (
             "Deterministic entities extracted from the report (use these as the allowed symbol set):\n"
