@@ -73,32 +73,6 @@ def _ollama_server_and_models() -> list:
     return [server_ok, model_check]
 
 
-def _tooluniverse() -> Check:
-    if importlib.util.find_spec("tooluniverse") is None:
-        return Check(
-            "ToolUniverse (optional, --enrich)", WARN,
-            "not installed; gene enrichment will be skipped. "
-            "Install with: python3 -m pip install tooluniverse PyYAML",
-            required=False,
-        )
-    try:
-        from enrich import EntityEnricher
-        enricher = EntityEnricher()
-    except Exception as exc:
-        return Check(
-            "ToolUniverse (optional, --enrich)", WARN,
-            f"installed but failed to initialise ({type(exc).__name__}); enrichment will be skipped.",
-            required=False,
-        )
-    if enricher.available:
-        return Check("ToolUniverse (optional, --enrich)", OK, "ready (gene-lookup tool resolved)", required=False)
-    return Check(
-        "ToolUniverse (optional, --enrich)", WARN,
-        "installed but no gene-lookup tool matched. Set LLMIZE_GENE_TOOL to a valid tool name.",
-        required=False,
-    )
-
-
 def _descriptor_schema() -> Check:
     path = os.path.join(PROJECT_ROOT, "json_reduction", "descriptor_schema.json")
     if os.path.exists(path):
@@ -126,7 +100,6 @@ def _data_dir_writable() -> Check:
 def run_checks() -> list:
     checks = [_python_version(), _ollama_package()]
     checks += _ollama_server_and_models()
-    checks.append(_tooluniverse())
     checks.append(_descriptor_schema())
     checks.append(_data_dir_writable())
     return checks

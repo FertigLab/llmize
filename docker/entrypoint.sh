@@ -5,7 +5,6 @@ set -euo pipefail
 
 source /opt/llmize/docker/boot_ollama.sh
 
-# Default to the env preflight if no command was given.
 if [ "$#" -eq 0 ]; then
     exec python3 /opt/llmize/pipeline.py --check
 fi

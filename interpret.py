@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import sys
@@ -13,12 +12,8 @@ import ollama
 
 from verify import deterministic_findings
 
-
-# Prompt builder
-
 SAMPLESHEET_KEY = "multiqc_samplesheet"
 
-# Tone rules appended to every prompt.
 STYLE_GUIDE = """
 Style and register (apply throughout):
 - Write in the neutral, descriptive register of a peer-reviewed research paper. Report
@@ -40,7 +35,6 @@ Style and register (apply throughout):
   expand what it stands for.
 """
 
-# Evidence rules to curb over-interpretation. Applied to every call.
 EVIDENCE_RULES = """
 Evidence and interpretation rules:
 - Tie every claim to numeric evidence. Do not infer causality; describe associations only.
@@ -265,6 +259,23 @@ def compute_group_stats(data: dict, groups: dict, max_metrics: int = 20) -> dict
     return out
 
 
+def _round_floats(obj, sig: int = 4):
+    """Recursively round floats to `sig` significant figures to drop spurious precision.
+
+    High-precision floats (e.g. 0.28376598223386557) add no information and can send
+    small models into digit-echoing repetition loops; 4 significant figures is enough.
+    """
+    if isinstance(obj, bool):
+        return obj
+    if isinstance(obj, float):
+        return float(f"{obj:.{sig}g}")
+    if isinstance(obj, dict):
+        return {k: _round_floats(v, sig) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_round_floats(v, sig) for v in obj]
+    return obj
+
+
 def build_section_prompt(section_name: str, section_obj: dict, groups: dict = None) -> str:
     """Build the prompt analysing one MultiQC section."""
     descriptor, data = _split_descriptor(section_obj)
@@ -275,7 +286,7 @@ def build_section_prompt(section_name: str, section_obj: dict, groups: dict = No
         "Section descriptor (defines what each field/key/value means):\n"
         f"```json\n{json.dumps(descriptor, indent=2)}\n```\n\n"
         "Section data:\n"
-        f"```json\n{json.dumps(data, indent=2)}\n```\n\n"
+        f"```json\n{json.dumps(_round_floats(data), indent=2)}\n```\n\n"
     )
 
     percentages = compute_percentages(section_name, data)
@@ -292,7 +303,7 @@ def build_section_prompt(section_name: str, section_obj: dict, groups: dict = No
             "Per-group summary statistics (mean and median by response group). Compare "
             "these group centers; do NOT infer a group difference from the min/max range "
             "alone, and explicitly flag any single-sample outlier that skews a group:\n"
-            f"```json\n{json.dumps(group_stats, indent=2)}\n```\n\n"
+            f"```json\n{json.dumps(_round_floats(group_stats), indent=2)}\n```\n\n"
         )
 
     prompt += (
@@ -431,45 +442,53 @@ def print_thinking(label: str, thinking: str) -> None:
     print(f"[think] ===== end {label} =====\n")
 
 
-def interpret_per_section(
+def build_chunks(report: dict, whole_report: bool, groups: dict) -> list:
+    """Return the (name, prompt) units to interpret. Whole-report mode is a single chunk."""
+    if whole_report:
+        return [("Whole report", build_prompt(report))]
+    return [(name, build_section_prompt(name, obj, groups=groups))
+            for name, obj in iter_analysis_sections(report)]
+
+
+def interpret_report(
     report: dict,
     model: str,
     num_ctx: int = 32768,
-    extra_system_context: str = "",
+    whole_report: bool = False,
     synthesize_final: bool = True,
     think: bool = True,
     gen_options: dict = None,
     user_instruction: str = "",
 ) -> str:
-    """Analyse each section in its own call, then combine into one document."""
+    """Interpret the report as one or more chunks; a single chunk is the whole report."""
     samplesheet_context = build_samplesheet_context(report)
     glossary_context = build_glossary_context(report)
     system = (SYSTEM_PROMPT + samplesheet_context + glossary_context
-              + extra_system_context + build_user_instruction(user_instruction))
+              + build_user_instruction(user_instruction))
     groups = response_groups(report)
 
-    # Resolve the model once
     model = ensure_model(model)
+    chunks = build_chunks(report, whole_report, groups)
+    total = len(chunks)
+    print(f"[interpret] Analyzing {total} chunk(s) with model '{model}'"
+          f"{' (thinking)' if think else ''}.", flush=True)
 
     responses = []
-    sections = list(iter_analysis_sections(report))
-    total = len(sections)
-    print(f"[interpret] Analyzing {total} sections one-by-one with model '{model}'"
-          f"{' (thinking)' if think else ''}.", flush=True)
-    for idx, (name, section_obj) in enumerate(sections, 1):
+    for idx, (name, prompt) in enumerate(chunks, 1):
         print(f"[interpret]   [{idx}/{total}] -> {name}", flush=True)
         started = time.monotonic()
-        prompt = build_section_prompt(name, section_obj, groups=groups)
         content, thinking = chat_ollama(
             prompt, model=model, system=system, num_ctx=num_ctx, think=think, gen_options=gen_options
         )
-        elapsed = time.monotonic() - started
-        print(f"[interpret]   [{idx}/{total}] {name} done in {elapsed:.1f}s", flush=True)
+        print(f"[interpret]   [{idx}/{total}] {name} done in {time.monotonic() - started:.1f}s", flush=True)
         print_thinking(name, thinking)
         responses.append((name, content))
 
+    if total == 1:
+        return responses[0][1]
+
     summary = None
-    if synthesize_final and responses:
+    if synthesize_final:
         print("[interpret] Synthesizing executive summary from per-section analyses...", flush=True)
         started = time.monotonic()
         summary, summary_thinking = synthesize_sections(
@@ -556,7 +575,6 @@ def _available_models() -> list:
 
     return []
 
-# Ollama call
 
 def ensure_model(model: str) -> str:
     """Resolve a usable Ollama model name, prompting the user if needed."""
@@ -667,35 +685,6 @@ def chat_ollama(
     return message.get("content", ""), (message.get("thinking") or "")
 
 
-def call_ollama(
-    prompt: str,
-    model: str,
-    system: str = SYSTEM_PROMPT,
-    num_ctx: int = 32768,
-    think: bool = True,
-    gen_options: dict = None,
-) -> tuple:
-    """Resolve the model then send one prompt; returns (content, thinking)."""
-    print(f"[interpret] Preparing to call model '{model}' via Ollama with num_ctx={num_ctx}...")
-    model = ensure_model(model)
-    print(f"[interpret] Calling model '{model}' via Ollama...")
-    return chat_ollama(prompt, model=model, system=system, num_ctx=num_ctx, think=think, gen_options=gen_options)
-
-
-def load_report(path: str) -> dict:
-    if not os.path.exists(path):
-        sys.exit(f"[error] Input file not found: {path}")
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
-
-
-def save_output(text: str, path: str) -> None:
-    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(text)
-    print(f"[interpret] Response saved to: {path}")
-
-
 def _git_short_sha() -> str:
     """Return the short commit SHA (+'-dirty' if the tree has changes), or '' if unavailable."""
     root = os.path.dirname(os.path.abspath(__file__))
@@ -721,7 +710,6 @@ def build_run_footer(
     think: bool,
     gen_options: dict = None,
     mode: str = "section-by-section",
-    enrich: bool = False,
     user_instruction: str = "",
     input_path: str = None,
 ) -> str:
@@ -741,10 +729,7 @@ def build_run_footer(
     if input_path:
         lines.append(f"- input: {input_path}")
     lines.append(f"- model: {model}")
-    lines.append(
-        f"- mode: {mode} | thinking: {'on' if think else 'off'} | "
-        f"enrichment: {'on' if enrich else 'off'}"
-    )
+    lines.append(f"- mode: {mode} | thinking: {'on' if think else 'off'}")
     lines.append(
         f"- sampling: temperature={g('temperature')}, seed={g('seed')}, "
         f"top_p={g('top_p')}, top_k={g('top_k')}, num_predict={g('num_predict')}"
@@ -758,135 +743,4 @@ def build_run_footer(
     return "\n".join(lines)
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Pass an annotated MultiQC JSON report to a local Ollama model."
-    )
-    parser.add_argument(
-        "--input", "-i",
-        required=True,
-        help="Path to the annotated JSON report (output of main.py)",
-    )
-    parser.add_argument(
-        "--model", "-m",
-        default="gemma4",
-        help="Ollama model name to use (default: llama3)",
-    )
-    parser.add_argument(
-        "--output", "-o",
-        default=None,
-        help="Path to save the LLM response. Defaults to <input_stem>_interpretation.txt",
-    )
-    parser.add_argument(
-    "--num_ctx",
-    type=int,
-    default=32768,
-    help="Context window size (default: 32768)",
-    )
-    parser.add_argument(
-        "--whole-report",
-        action="store_true",
-        help="Send the entire report in a single call instead of analysing each section one-by-one.",
-    )
-    parser.add_argument(
-        "--enrich",
-        action="store_true",
-        help="Enrich the system prompt with ToolUniverse gene annotations (requires the 'tooluniverse' package).",
-    )
-    parser.add_argument(
-        "--no-synthesis",
-        action="store_true",
-        help="Skip the final executive-summary synthesis pass (section-by-section mode only).",
-    )
-    parser.add_argument(
-        "--think",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Use the model's native thinking mode; the reasoning is printed to the terminal "
-             "(not saved) and kept out of the interpretation. On by default; --no-think disables it (faster).",
-    )
-    parser.add_argument(
-        "--prompt",
-        default=None,
-        help="Extra instruction appended to the system prompt for every section "
-             "(e.g. 'Focus on immune cell types' or 'Answer in bullet points').",
-    )
-    parser.add_argument("--temperature", type=float, default=None,
-                        help="Sampling temperature (model default if unset; gemma4 defaults to 1).")
-    parser.add_argument("--top_p", type=float, default=None, help="Nucleus sampling top_p.")
-    parser.add_argument("--top_k", type=int, default=None, help="Top-k sampling.")
-    parser.add_argument("--seed", type=int, default=None,
-                        help="Sampling seed for reproducible runs.")
-    parser.add_argument("--num_predict", type=int, default=None,
-                        help="Max tokens to generate per call (model default if unset).")
-    return parser.parse_args()
-
-
-def _build_enrichment_context(report: dict, enabled: bool) -> str:
-    if not enabled:
-        return ""
-    try:
-        from enrich import enrich_report
-    except Exception as exc:
-        print(f"[interpret] Enrichment unavailable ({exc}); continuing without it.")
-        return ""
-    return enrich_report(report)
-
-
-def main() -> None:
-    args = parse_args()
-
-    if args.output is None:
-        stem = os.path.splitext(os.path.basename(args.input))[0]
-        out_dir = os.path.dirname(os.path.abspath(args.input))
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        args.output = os.path.join(out_dir, f"{stem}_interpretation_{timestamp}.md")
-
-    print(f"[interpret] Loading report: {args.input}")
-    report = load_report(args.input)
-
-    section_count = sum(1 for v in report.values() if isinstance(v, dict) and "data" in v)
-    print(f"[interpret] Loaded {section_count} data sections.")
-
-    enrichment = _build_enrichment_context(report, args.enrich)
-    gen_options = build_gen_options(
-        temperature=args.temperature, top_p=args.top_p, top_k=args.top_k,
-        seed=args.seed, num_predict=args.num_predict,
-    )
-
-    if args.whole_report:
-        prompt = build_prompt(report)
-        system = (SYSTEM_PROMPT + enrichment + build_glossary_context(report)
-                  + build_user_instruction(args.prompt))
-        response_text, thinking = call_ollama(
-            prompt, model=args.model, system=system,
-            num_ctx=args.num_ctx, think=args.think, gen_options=gen_options,
-        )
-        print_thinking("Whole report", thinking)
-    else:
-        response_text = interpret_per_section(
-            report,
-            model=args.model,
-            num_ctx=args.num_ctx,
-            extra_system_context=enrichment,
-            synthesize_final=not args.no_synthesis,
-            think=args.think,
-            gen_options=gen_options,
-            user_instruction=args.prompt,
-        )
-
-    footer = build_run_footer(
-        model=args.model, num_ctx=args.num_ctx, think=args.think, gen_options=gen_options,
-        mode="whole-report" if args.whole_report else "section-by-section",
-        enrich=args.enrich, user_instruction=args.prompt, input_path=args.input,
-    )
-    save_output(response_text + footer, args.output)
-
-    print("LLM RESPONSE PREVIEW (first 1000 chars)")
-    print(response_text[:1000])
-    if len(response_text) > 1000:
-        print(f"\n... [{len(response_text) - 1000} more characters in saved file]")
-
-
-if __name__ == "__main__":
     main()
