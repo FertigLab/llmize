@@ -134,6 +134,9 @@ def report_vocabulary(report: dict) -> set:
     vocab: set = set()
 
     for gene in entities.get("genes", []):
+        for part in _SPLIT.split(gene):
+            if part:
+                vocab.add(part.upper())
         vocab.add(gene.upper())
 
     for cell_type in entities.get("cell_types", []):
