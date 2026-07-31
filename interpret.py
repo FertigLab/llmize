@@ -45,7 +45,7 @@ Style and register (apply throughout):
 EVIDENCE_RULES = """
 Evidence and interpretation rules:
 - Tie every claim to numeric evidence. Do not infer causality; describe associations only.
-- State a responder vs non-responder difference ONLY if it is consistent across at least
+- State differences across meta data group ONLY if it is consistent across at least
   2 samples per group, OR both the mean and the median support the same direction.
   Otherwise state plainly: "No consistent group-level difference detected."
 - When you say a group is higher or lower, check that the direction matches the numbers
@@ -59,7 +59,7 @@ Evidence and interpretation rules:
 """
 
 SYSTEM_PROMPT = """You are an expert bioinformatician. You are given a report generated
-by a bioinformatics workflow. The report incluced outputs from a number of bioinformatics
+by a bioinformatics workflow. The report includes outputs from a number of bioinformatics
 tools and include quality control metrics, as well as actual aggregated analysis results.
 The report includes the samplesheet table that may contain important clinical metadata.
 Different report sections may have different structures and different biological meaning,
@@ -71,7 +71,7 @@ analyse the data and give a concise summary.
 def build_prompt(report: dict) -> str:
     report_str = json.dumps(report, indent=2)
     return (
-        "Here is the annotated MultiQC spatial transcriptomics report.\n"
+        "Here is an annotated spatial transcriptomics report.\n"
         "Please analyze it and provide a structured biological interpretation.\n\n"
         f"```json\n{report_str}\n```"
     )
@@ -92,8 +92,9 @@ def build_samplesheet_context(report: dict) -> str:
     return (
         "\n\n--- SAMPLE SHEET (shared context for every section below) ---\n"
         f"```json\n{json.dumps(samplesheet, indent=2)}\n```\n"
-        "Carry these per-sample labels (e.g. responder vs non-responder) into your "
-        "interpretation of every section."
+        """Carry these per-sample labels into your interpretation of every section. 
+Note that meta data can be binary (case/control, responder/non-responder etc), 
+categorical (e.g. tissue type), or continuous (e.g. age, tumor size, time point)."""
     )
 
 
@@ -216,14 +217,14 @@ def compute_percentages(section_name: str, data: dict) -> dict:
     return {}
 
 
-def response_groups(report: dict) -> dict:
-    """Map sample_id -> response label (e.g. 'responder') from the sample sheet."""
+def meta_groups(report: dict) -> dict:
+    """Map sample_id -> meta data label (e.g. 'responder') from the sample sheet."""
     samplesheet = report.get(SAMPLESHEET_KEY, {})
     data = samplesheet.get("data", {}) if isinstance(samplesheet, dict) else {}
     groups = {}
     for sample, meta in data.items():
         if isinstance(meta, dict):
-            label = meta.get("responce") or meta.get("response")
+            label = meta.get("meta_group") or meta.get("meta group")
             if label:
                 groups[sample] = label
     return groups
@@ -296,8 +297,8 @@ def build_section_prompt(section_name: str, section_obj: dict, groups: dict = No
 
     prompt += (
         "Give a concise, analytical interpretation of THIS section only: the main "
-        "patterns, notable or outlier values, differences between samples (relate them to "
-        "the responder / non-responder labels from the sample sheet), and the biological "
+        "patterns, notable or outlier values, differences between samples (relate them to meta data "
+        "labels from the sample sheet), and the biological "
         "meaning. Cite specific numbers/percentages. Do not speculate about sections you were not shown."
     )
 
@@ -352,7 +353,7 @@ def synthesize_sections(
     """Final call condensing the section analyses into a summary; returns (content, thinking)."""
     combined = "\n\n".join(f"### {name}\n{text.strip()}" for name, text in responses)
     prompt = (
-        "Here are the per-section analyses of one MultiQC spatial transcriptomics report. "
+        "Here are the per-section analyses of one report section. "
         "Write the executive summary as instructed.\n\n"
         f"{combined}"
     )
@@ -463,7 +464,7 @@ def interpret_per_section(
     glossary_context = build_glossary_context(report)
     system = (SYSTEM_PROMPT + samplesheet_context + glossary_context
               + extra_system_context + build_user_instruction(user_instruction))
-    groups = response_groups(report)
+    groups = meta_groups(report)
 
     # Resolve the model once
     model = ensure_model(model)
