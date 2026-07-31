@@ -24,40 +24,10 @@
     "value_type": "float - higher = stronger inferred ligand-receptor interaction"
   },
   "multiqc_co_occurrence": {
-    "description": "Squidpy co-occurrence: how the probability of each cell type changes with spatial distance from a focal cell type, as a ratio to that cell type's overall frequency. Each section (multiqc_co_occurrence, _1, _2, ...) is conditioned on one focal cell type. Ratio > 1 at a distance = enriched near the focal type there; < 1 = depleted; ~1 = as expected by chance. Report the overall trend (enriched/depleted, and at short vs long range) rather than every distance value.",
-    "structure": "target_cell_type to [ [distance_bin, ratio], ... ] (a curve over increasing distance)",
-    "key_type": "Target cell type names. 'NA' = spots with no valid assignment.",
+    "description": "Mean squidpy co-occurrence: how the probability of each cell type changes with spatial distance from a focal cell type, as a ratio to that cell type's overall frequency. Each section (multiqc_co_occurrence, _1, _2, ...) is conditioned on one focal cell type. Ratio > 1 at a distance = enriched near the focal type there; < 1 = depleted; ~1 = as expected by chance. Report the overall trend (enriched/depleted, and at short vs long range) rather than every distance value.",
+    "structure": "focal_cell_type to [ [distance_bin, ratio], ... ] (a curve over increasing distance)",
+    "key_type": "Focal cell type names. 'NA' = spots with no valid assignment.",
     "value_type": "list of [distance_bin, ratio]; ratio > 1 = enriched at that distance, < 1 = depleted"
-  },
-  "multiqc_co_occurrence_1": {
-    "description": "Squidpy co-occurrence conditioned on one focal cell type (see multiqc_co_occurrence). Ratio > 1 = enriched near the focal type at that distance, < 1 = depleted. Summarize the trend, not every value.",
-    "structure": "target_cell_type to [ [distance_bin, ratio], ... ]",
-    "key_type": "Target cell type names. 'NA' = spots with no valid assignment.",
-    "value_type": "list of [distance_bin, ratio]; ratio > 1 = enriched, < 1 = depleted"
-  },
-  "multiqc_co_occurrence_2": {
-    "description": "Squidpy co-occurrence conditioned on one focal cell type (see multiqc_co_occurrence). Ratio > 1 = enriched near the focal type at that distance, < 1 = depleted. Summarize the trend, not every value.",
-    "structure": "target_cell_type to [ [distance_bin, ratio], ... ]",
-    "key_type": "Target cell type names. 'NA' = spots with no valid assignment.",
-    "value_type": "list of [distance_bin, ratio]; ratio > 1 = enriched, < 1 = depleted"
-  },
-  "multiqc_co_occurrence_3": {
-    "description": "Squidpy co-occurrence conditioned on one focal cell type (see multiqc_co_occurrence). Ratio > 1 = enriched near the focal type at that distance, < 1 = depleted. Summarize the trend, not every value.",
-    "structure": "target_cell_type to [ [distance_bin, ratio], ... ]",
-    "key_type": "Target cell type names. 'NA' = spots with no valid assignment.",
-    "value_type": "list of [distance_bin, ratio]; ratio > 1 = enriched, < 1 = depleted"
-  },
-  "multiqc_co_occurrence_4": {
-    "description": "Squidpy co-occurrence conditioned on one focal cell type (see multiqc_co_occurrence). Ratio > 1 = enriched near the focal type at that distance, < 1 = depleted. Summarize the trend, not every value.",
-    "structure": "target_cell_type to [ [distance_bin, ratio], ... ]",
-    "key_type": "Target cell type names. 'NA' = spots with no valid assignment.",
-    "value_type": "list of [distance_bin, ratio]; ratio > 1 = enriched, < 1 = depleted"
-  },
-  "multiqc_co_occurrence_5": {
-    "description": "Squidpy co-occurrence conditioned on one focal cell type (see multiqc_co_occurrence). Ratio > 1 = enriched near the focal type at that distance, < 1 = depleted. Summarize the trend, not every value.",
-    "structure": "target_cell_type to [ [distance_bin, ratio], ... ]",
-    "key_type": "Target cell type names. 'NA' = spots with no valid assignment.",
-    "value_type": "list of [distance_bin, ratio]; ratio > 1 = enriched, < 1 = depleted"
   },
   "multiqc_samplesheet": {
     "description": "The sample sheet provided as input to the pipeline. Contains per-sample metadata columns that vary by study (e.g. treatment response, timepoint, tissue region, sample type, case/control). Grouping columns are detected automatically from whatever columns are present; columns containing file paths (data_directory, expression_profile) are excluded.",
