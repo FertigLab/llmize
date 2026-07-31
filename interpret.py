@@ -54,7 +54,7 @@ Evidence and interpretation rules:
 """
 
 SYSTEM_PROMPT = """You are an expert bioinformatician. You are given a report generated
-by a bioinformatics workflow. The report incluced outputs from a number of bioinformatics
+by a bioinformatics workflow. The report includes outputs from a number of bioinformatics
 tools and include quality control metrics, as well as actual aggregated analysis results.
 The report includes the samplesheet table that may contain important clinical metadata.
 Different report sections may have different structures and different biological meaning,
@@ -66,7 +66,7 @@ analyse the data and give a concise summary.
 def build_prompt(report: dict) -> str:
     report_str = json.dumps(report, indent=2)
     return (
-        "Here is the annotated MultiQC spatial transcriptomics report.\n"
+        "Here is an annotated spatial transcriptomics report.\n"
         "Please analyze it and provide a structured biological interpretation.\n\n"
         f"```json\n{report_str}\n```"
     )
@@ -430,7 +430,7 @@ def synthesize_sections(
     """Final call condensing the section analyses into a summary; returns (content, thinking)."""
     combined = "\n\n".join(f"### {name}\n{text.strip()}" for name, text in responses)
     prompt = (
-        "Here are the per-section analyses of one MultiQC spatial transcriptomics report. "
+        "Here are the per-section analyses of one report section. "
         "Write the executive summary as instructed.\n\n"
         f"{combined}"
     )
