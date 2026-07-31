@@ -39,9 +39,10 @@ Style and register (apply throughout):
 EVIDENCE_RULES = """
 Evidence and interpretation rules:
 - Tie every claim to numeric evidence. Do not infer causality; describe associations only.
-- State a responder vs non-responder difference ONLY if it is consistent across at least
-  2 samples per group, OR both the mean and the median support the same direction.
-  Otherwise state plainly: "No consistent group-level difference detected."
+- State a between-group difference (for any sample-metadata grouping — e.g. response,
+  timepoint, region) ONLY if it is consistent across at least 2 samples per group, OR both
+  the mean and the median support the same direction. Otherwise state plainly:
+  "No consistent group-level difference detected."
 - When you say a group is higher or lower, check that the direction matches the numbers
   (e.g. do not call the smaller mean "higher").
 - Do not generalize a pattern driven by a single sample. If one sample drives a group's
@@ -79,15 +80,30 @@ def _split_descriptor(section_obj: dict) -> tuple:
 
 
 def build_samplesheet_context(report: dict) -> str:
-    """Sample sheet block for the shared system prompt."""
+    """Sample sheet block for the shared system prompt, naming the grouping columns."""
     samplesheet = report.get(SAMPLESHEET_KEY)
     if not isinstance(samplesheet, dict):
         return ""
+    groups = sample_groups(report)
+    if groups:
+        cols = "; ".join(
+            f"{col} ({', '.join(sorted(set(mapping.values())))})"
+            for col, mapping in groups.items()
+        )
+        grouping_note = (
+            "Group samples using the sample-metadata columns that vary across samples: "
+            f"{cols}. Compare along whichever of these axes are biologically relevant, and "
+            "carry them into every section."
+        )
+    else:
+        grouping_note = (
+            "No sample-metadata column meaningfully separates the samples, so do not force "
+            "group comparisons — describe patterns across samples directly."
+        )
     return (
         "\n\n--- SAMPLE SHEET (shared context for every section below) ---\n"
         f"```json\n{json.dumps(samplesheet, indent=2)}\n```\n"
-        "Carry these per-sample labels (e.g. responder vs non-responder) into your "
-        "interpretation of every section."
+        + grouping_note
     )
 
 
@@ -210,51 +226,100 @@ def compute_percentages(section_name: str, data: dict) -> dict:
     return {}
 
 
-def response_groups(report: dict) -> dict:
-    """Map sample_id -> response label (e.g. 'responder') from the sample sheet."""
+_STRUCTURAL_META = {"sample_id", "file", "data_directory", "expression_profile", "ref_scrna"}
+
+
+def _is_number(s) -> bool:
+    try:
+        float(s)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def sample_groups(report: dict, max_group_values: int = 10) -> dict:
+    """Auto-detect categorical grouping columns from the sample sheet.
+
+    Returns {column: {sample_id: value}} for each sample-sheet column usable to group
+    samples — 2+ distinct categorical values, not all-identical, not near-unique, not
+    continuous. Duplicate partitions (e.g. timepoint vs timepoint_date) are collapsed.
+    Metadata-agnostic: works for response, timepoint, region, sample_type, etc.
+    """
     samplesheet = report.get(SAMPLESHEET_KEY, {})
     data = samplesheet.get("data", {}) if isinstance(samplesheet, dict) else {}
+    samples = {sid: meta for sid, meta in data.items() if isinstance(meta, dict)}
+    n = len(samples)
+    if n < 2:
+        return {}
+
+    columns = {}
+    for sid, meta in samples.items():
+        for col, val in meta.items():
+            if col in _STRUCTURAL_META or val in (None, ""):
+                continue
+            columns.setdefault(col, {})[sid] = str(val)
+
     groups = {}
-    for sample, meta in data.items():
-        if isinstance(meta, dict):
-            label = meta.get("responce") or meta.get("response")
-            if label:
-                groups[sample] = label
+    seen_partitions = set()
+    for col, mapping in columns.items():
+        distinct = set(mapping.values())
+        if len(distinct) < 2 or len(distinct) >= n or len(distinct) > max_group_values:
+            continue  # all-same, near-unique identifier, or too many groups
+        if len(distinct) > 3 and all(_is_number(v) for v in distinct):
+            continue  # continuous (e.g. age)
+        partition = frozenset(
+            frozenset(sid for sid, v in mapping.items() if v == val) for val in distinct
+        )
+        if partition in seen_partitions:
+            continue  # same split as an already-kept column
+        seen_partitions.add(partition)
+        groups[col] = mapping
     return groups
 
 
-def compute_group_stats(data: dict, groups: dict, max_metrics: int = 20) -> dict:
-    """Per-group mean/median for sample-keyed numeric sections (bounded metric count)."""
+def compute_group_stats(data: dict, groups: dict, max_metrics: int = 20, max_groups: int = 6) -> dict:
+    """Per-group mean/median for sample-keyed numeric sections, for each grouping column.
+
+    `groups` is {column: {sample_id: value}}. Returns
+    {column: {metric: {group_value: {mean, median}}}}. Columns with more than
+    `max_groups` distinct values are skipped (too many groups to compare meaningfully).
+    """
     if not isinstance(data, dict) or not groups:
         return {}
-    samples = [s for s in data if s in groups and isinstance(data[s], dict)]
-    if len(samples) < 2:
+    numeric_samples = [s for s in data if isinstance(data.get(s), dict)]
+    if len(numeric_samples) < 2:
         return {}
 
     metrics = []
-    for s in samples:
+    for s in numeric_samples:
         for k, v in data[s].items():
             if isinstance(v, (int, float)) and k not in metrics:
                 metrics.append(k)
     if not metrics or len(metrics) > max_metrics:
         return {}
 
-    by_group = {}
-    for s in samples:
-        by_group.setdefault(groups[s], []).append(s)
-
     out = {}
-    for metric in metrics:
-        per_group = {}
-        for group, gsamples in by_group.items():
-            vals = [data[s][metric] for s in gsamples if isinstance(data[s].get(metric), (int, float))]
-            if vals:
-                per_group[group] = {
-                    "mean": round(statistics.mean(vals), 3),
-                    "median": round(statistics.median(vals), 3),
-                }
-        if per_group:
-            out[metric] = per_group
+    for col, mapping in groups.items():
+        by_group = {}
+        for s in numeric_samples:
+            if s in mapping:
+                by_group.setdefault(mapping[s], []).append(s)
+        if len(by_group) < 2 or len(by_group) > max_groups:
+            continue
+        col_stats = {}
+        for metric in metrics:
+            per_group = {}
+            for group, gsamples in by_group.items():
+                vals = [data[s][metric] for s in gsamples if isinstance(data[s].get(metric), (int, float))]
+                if vals:
+                    per_group[group] = {
+                        "mean": round(statistics.mean(vals), 3),
+                        "median": round(statistics.median(vals), 3),
+                    }
+            if len(per_group) >= 2:
+                col_stats[metric] = per_group
+        if col_stats:
+            out[col] = col_stats
     return out
 
 
@@ -299,16 +364,18 @@ def build_section_prompt(section_name: str, section_obj: dict, groups: dict = No
     group_stats = compute_group_stats(data, groups) if groups else {}
     if group_stats:
         prompt += (
-            "Per-group summary statistics (mean and median by response group). Compare "
-            "these group centers; do NOT infer a group difference from the min/max range "
-            "alone, and explicitly flag any single-sample outlier that skews a group:\n"
+            "Per-group summary statistics (mean and median), computed for each sample-metadata "
+            "grouping present (e.g. by response, timepoint, region). Compare group centers within "
+            "a grouping; do NOT infer a group difference from the min/max range alone, and "
+            "explicitly flag any single-sample outlier that skews a group:\n"
             f"```json\n{json.dumps(_round_floats(group_stats), indent=2)}\n```\n\n"
         )
 
     prompt += (
         "Give a concise, analytical interpretation of THIS section only: the main "
-        "patterns, notable or outlier values, differences between samples (relate them to "
-        "the responder / non-responder labels from the sample sheet), and the biological "
+        "patterns, notable or outlier values, and differences between samples — relating them to "
+        "whichever sample-metadata groupings are present in the sample sheet (if none are "
+        "informative, describe patterns without forcing a group comparison) — plus the biological "
         "meaning. Cite specific numbers/percentages. Do not speculate about sections you were not shown."
     )
 
@@ -481,7 +548,7 @@ def interpret_report(
     glossary_context = build_glossary_context(report)
     system = (SYSTEM_PROMPT + samplesheet_context + glossary_context
               + build_user_instruction(user_instruction))
-    groups = response_groups(report)
+    groups = sample_groups(report)
 
     model = ensure_model(model)
     chunks = build_chunks(report, whole_report, groups)
@@ -757,6 +824,3 @@ def build_run_footer(
     if sha:
         lines.append(f"- code: {sha}")
     return "\n".join(lines)
-
-
-    main()
