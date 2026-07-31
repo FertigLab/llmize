@@ -1,0 +1,10 @@
+.git/
+__pycache__/
+*.pyc
+*.pyo
+# Generated outputs / intermediates — recreated at runtime, no need to bake in.
+data/
+results/
+work/
+.nextflow*
+*.log
