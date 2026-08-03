@@ -1,6 +1,7 @@
 process INTERPRET {
     tag "${report.baseName}"
-    container 'llmize:latest'
+    container 'ghcr.io/fertiglab/llmize:latest'
+    containerOptions "-v ${projectDir}:/opt/llmize:ro"
     publishDir params.outdir, mode: 'copy'
 
     input:
@@ -25,12 +26,12 @@ process INTERPRET {
     def top_k_flag   = params.top_k       != null ? "--top_k ${params.top_k}" : ''
     def numpred_flag = params.num_predict != null ? "--num_predict ${params.num_predict}" : ''
     """
-    ${boot}
     STAMP=\$(date +%Y%m%d_%H%M%S)
     python3 ${home}/pipeline.py \\
         --input '${report}' \\
         --model '${params.model}' \\
         --num_ctx ${params.num_ctx} \\
+        --work-dir . \\
         ${think_flag} ${enrich_flag} ${review_flag} ${whole_flag} ${synth_flag} \\
         ${prompt_flag} ${temp_flag} ${seed_flag} ${top_p_flag} ${top_k_flag} ${numpred_flag} \\
         --output "${report.baseName}_interpretation_\${STAMP}.md"

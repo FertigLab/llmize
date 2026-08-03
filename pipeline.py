@@ -125,6 +125,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Run environment preflight checks (Ollama, models, ToolUniverse, schema) and exit.",
     )
+    parser.add_argument(
+        "--work-dir",
+        default=".",
+        help="Working directory for saving intermediate and final output files (default: current directory).",
+    )
     return parser.parse_args()
 
 
@@ -167,6 +172,7 @@ def run_pipeline(
     annotated_filename: str | None,
     output_path: str | None,
     num_ctx: int,
+    work_dir: str = ".",
     whole_report: bool = False,
     enrich: bool = False,
     synthesize_final: bool = True,
@@ -184,7 +190,7 @@ def run_pipeline(
 
     if extracted_filename is None:
         extracted_filename = default_output_name(input_path, prefix="extracted_")
-    extracted_path = save_json(reduced, DATA_DIR, extracted_filename)
+    extracted_path = save_json(reduced, work_dir, extracted_filename)
     print(f"[pipeline] Extracted JSON saved: {extracted_path}")
 
     if annotated_filename is None:
@@ -196,7 +202,7 @@ def run_pipeline(
     annotated_path = merge(
         data_path=extracted_path,
         descriptor_path=descriptor_path,
-        output_dir=DATA_DIR,
+        output_dir=work_dir,
         output_filename=annotated_filename,
         focal_labels=focal_labels,
     )
@@ -238,7 +244,7 @@ def run_pipeline(
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         stem = os.path.splitext(os.path.basename(input_path))[0]
         output_filename = f"{stem}_interpretation_{timestamp}.md"
-        output_path = os.path.join(DATA_DIR, output_filename)
+        output_path = os.path.join(work_dir, output_filename)
 
     footer = build_run_footer(
         model=model, num_ctx=num_ctx, think=think, gen_options=gen_options,
@@ -268,6 +274,7 @@ def main() -> None:
         annotated_filename=args.annotated_output,
         output_path=args.output,
         num_ctx=args.num_ctx,
+        work_dir=args.work_dir,
         whole_report=args.whole_report,
         enrich=args.enrich,
         synthesize_final=not args.no_synthesis,
