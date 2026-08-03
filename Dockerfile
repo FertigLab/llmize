@@ -8,14 +8,10 @@ RUN apt-get update \
 
 WORKDIR /opt/llmize
 
-ARG INSTALL_ENRICH=false
-RUN python3 -m pip install --no-cache-dir --break-system-packages "ollama>=0.5" \
- && if [ "$INSTALL_ENRICH" = "true" ]; then \
-        python3 -m pip install --no-cache-dir --break-system-packages tooluniverse "PyYAML>=6" ; \
-    fi
+RUN python3 -m pip install --no-cache-dir --break-system-packages "ollama>=0.5"
 
-# TEST_MODEL is baked in for offline runs; LLMIZE_MODEL is the runtime default.
-# Set BAKE_MODEL=true to also bake LLMIZE_MODEL for air-gapped use.
+# TEST_MODEL is baked in for offline runs, LLMIZE_MODEL is the runtime default.
+# Set BAKE_MODEL=true to also bake LLMIZE_MODEL for isolated use.
 ARG TEST_MODEL=smollm2:135m
 ARG LLMIZE_MODEL=gemma4
 ENV LLMIZE_MODEL=${LLMIZE_MODEL}

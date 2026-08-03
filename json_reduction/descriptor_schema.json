@@ -1,10 +1,37 @@
 {
+  "multiqc_degree_centrality": {
+    "description": "Squidpy degree centrality of each cell type on the spatial-neighbor graph: the (normalized) average number of neighbors a cell of that type has. Higher = that cell type sits in more densely connected neighborhoods.",
+    "structure": "sample_id to { cell_type_name: score }",
+    "key_type": "Cell type names. 'NA' = spots with no valid cell-type/neighborhood assignment.",
+    "value_type": "float, ~0-1 (normalized degree centrality) - higher = more connected"
+  },
+  "multiqc_closeness_centrality": {
+    "description": "Squidpy closeness centrality of each cell type on the spatial-neighbor graph: how central a cell type is, i.e. the inverse of its average graph distance to other cells. Higher = more centrally embedded in the tissue neighborhood graph.",
+    "structure": "sample_id to { cell_type_name: score }",
+    "key_type": "Cell type names. 'NA' = spots with no valid assignment.",
+    "value_type": "float, ~0-1 - higher = more central"
+  },
+  "multiqc_average_clustering": {
+    "description": "Squidpy average clustering coefficient of each cell type on the spatial-neighbor graph: how tightly cells of that type cluster together (the fraction of a cell's neighbors that are themselves neighbors). Higher = more spatial self-aggregation.",
+    "structure": "sample_id to { cell_type_name: score }",
+    "key_type": "Cell type names. 'NA' = spots with no valid assignment.",
+    "value_type": "float, ~0-1 - higher = more clustered"
+  },
+  "multiqc_spacemarkers_LRscores_interactions": {
+    "description": "SpaceMarkers ligand-receptor interaction scores: the strength of inferred, spatially co-localized signaling for each ligand-receptor pair between a sender and a receiver cell type, per sample. Higher = stronger inferred interaction.",
+    "structure": "sample_id to { 'LIGAND(_RECEPTOR parts)-SENDER_to_RECEIVER': score }",
+    "key_type": "Interaction keys of the form <ligand/receptor components>-<sender>_to_<receiver> (e.g. 'IGFBP3_TMEM219-FIBROBLASTS_to_PDAC').",
+    "value_type": "float - higher = stronger inferred ligand-receptor interaction"
+  },
+  "multiqc_co_occurrence": {
+    "description": "Mean squidpy co-occurrence: how the probability of each cell type changes with spatial distance from a focal cell type, as a ratio to that cell type's overall frequency. Each section (multiqc_co_occurrence, _1, _2, ...) is conditioned on one focal cell type. Ratio > 1 at a distance = enriched near the focal type there; < 1 = depleted; ~1 = as expected by chance. Report the overall trend (enriched/depleted, and at short vs long range) rather than every distance value.",
+    "structure": "focal_cell_type to [ [distance_bin, ratio], ... ] (a curve over increasing distance)",
+    "key_type": "Focal cell type names. 'NA' = spots with no valid assignment.",
+    "value_type": "list of [distance_bin, ratio]; ratio > 1 = enriched at that distance, < 1 = depleted"
+  },
   "multiqc_samplesheet": {
-    "description": "The sample sheet provided as input to the pipeline. Contains per-sample metadata columns. Columns containing file paths (data_directory, expression_profile) are excluded.",
-    "structure": "sample_id to { metadata fields }",
-    "properties": {
-      "responce": "Treatment response label (example: responder / non-responder)."
-    }
+    "description": "The sample sheet provided as input to the pipeline. Contains per-sample metadata columns that vary by study (e.g. treatment response, timepoint, tissue region, sample type, case/control). Grouping columns are detected automatically from whatever columns are present; columns containing file paths (data_directory, expression_profile) are excluded.",
+    "structure": "sample_id to { metadata fields }"
   },
   "multiqc_atlas": {
     "description": "Summary of the cells and genes in the reference atlas. Transcription profiles from the reference atlas are used to infer cell types in the samples.",
@@ -62,7 +89,7 @@
     "structure": "sample_id to { GENE-I: score }",
     "key_format": "GENE_NAME-I (example: 'CXCL14-I', 'HLA-DRB1-I')",
     "value_type": "float, range 0-1 - higher = expression more spatially clustered across tissue spots",
-    "analysis_instructions": "Assess whether spatial clustering differs systematically between responders and non-responders. If there is no clear, consistent group-level difference, state that plainly (e.g. 'Moran's I scores do not differ systematically between response groups') and do NOT enumerate per-sample scores gene by gene. Name only the few genes (if any) with a notable and consistent group difference, and otherwise describe the overall pattern briefly."
+    "analysis_instructions": "Assess whether spatial clustering differs systematically between the sample-metadata groups present. If there is no clear, consistent group-level difference, state that plainly (e.g. 'Moran's I scores do not differ systematically between groups') and do NOT enumerate per-sample scores gene by gene. Name only the few genes (if any) with a notable and consistent group difference, and otherwise describe the overall pattern briefly."
   },
   "multiqc_spatial_neighbors": {
     "description": "Cell type immediate neighborhood across samples. Each section (multiqc_spatial_neighbors, _1, _2, ...) represents one focal cell type and counts how many neighbors of each type surround it. Focal cell types are dynamically generated during merge based on actual data.",
