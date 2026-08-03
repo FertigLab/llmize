@@ -1,6 +1,9 @@
 process INTERPRET {
     tag "${report.baseName}"
-    container 'ghcr.io/fertiglab/llmize:latest'
+    label "process_gpu"
+    resourceLimits cpus: 4, memory: 24.GB, time: '1h'
+    //container 'ghcr.io/fertiglab/llmize:latest'
+    container 'ghcr.io/fertiglab/llmize:sha-f2ae922'
     publishDir params.outdir, mode: 'copy'
 
     input:
@@ -24,6 +27,13 @@ process INTERPRET {
     def top_k_flag   = params.top_k       != null ? "--top_k ${params.top_k}" : ''
     def numpred_flag = params.num_predict != null ? "--num_predict ${params.num_predict}" : ''
     """
+    export HOME="\$PWD"
+    export XDG_CACHE_HOME="\$PWD/.cache"
+    export OLLAMA_MODELS="\$PWD/ollama/models"
+    mkdir -p "\$OLLAMA_MODELS" "\$XDG_CACHE_HOME"
+
+    ${boot}
+
     STAMP=\$(date +%Y%m%d_%H%M%S)
     python3 ${home}/pipeline.py \\
         --input '${report}' \\
