@@ -1,6 +1,21 @@
-"""json_reduction: load, clean, and annotate MultiQC JSON reports.
+"""json_reduction: load, reduce, and annotate MultiQC JSON reports."""
 
-Marking this directory as a package so `from json_reduction.X import ...`
-(used by pipeline.py) resolves reliably from a fresh clone, regardless of the
-current working directory.
-"""
+from .reduction import (
+    DATA_DIR,
+    resolve_path,
+    load_json,
+    save_json,
+    extract_report_saved_raw_data,
+    extract_focal_labels,
+    annotate,
+)
+
+__all__ = [
+    "DATA_DIR",
+    "resolve_path",
+    "load_json",
+    "save_json",
+    "extract_report_saved_raw_data",
+    "extract_focal_labels",
+    "annotate",
+]

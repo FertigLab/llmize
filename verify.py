@@ -2,7 +2,106 @@ from __future__ import annotations
 
 import re
 
-from enrich import extract_entities
+DEFAULT_MAX_GENES = 25
+
+
+def _collect_cell_types(report: dict) -> set:
+    """Gather cell-type names from the cell-type and spatial-neighbor sections."""
+    cell_types: set = set()
+    skip = {"unknown", "na"}
+
+    for name, section in report.items():
+        if not isinstance(section, dict):
+            continue
+        data = section.get("data", {})
+        if not isinstance(data, dict):
+            continue
+
+        if name == "multiqc_spatial_neighbors":
+            for sub in data.values():
+                if not isinstance(sub, dict):
+                    continue
+                focal = sub.get("focal_cell_type")
+                if isinstance(focal, str) and focal.lower() not in skip:
+                    cell_types.add(focal)
+                for sample in sub.get("data", {}).values():
+                    if isinstance(sample, dict):
+                        cell_types.update(sample.keys())
+        elif name.endswith("_ct") or "deconvolved" in name:
+            for sample in data.values():
+                if isinstance(sample, dict):
+                    cell_types.update(sample.keys())
+
+    return {c for c in cell_types if isinstance(c, str) and c.lower() not in skip}
+
+
+def _collect_moran_genes(report: dict) -> list:
+    section = report.get("multiqc_Moran_I_interactions")
+    if not isinstance(section, dict):
+        return []
+
+    best: dict = {}
+    for sample in section.get("data", {}).values():
+        if not isinstance(sample, dict):
+            continue
+        for key, score in sample.items():
+            gene = key[:-2] if key.endswith("-I") else key
+            if isinstance(score, (int, float)):
+                best[gene] = max(best.get(gene, float("-inf")), score)
+
+    return [g for g, _ in sorted(best.items(), key=lambda kv: kv[1], reverse=True)]
+
+
+def _parse_ligrec_key(key: str, cell_types: set) -> dict | None:
+    remainder = key
+    trailing = []
+    for _ in range(2):
+        match = None
+        for ct in cell_types:
+            suffix = "-" + ct
+            if remainder.endswith(suffix) and (match is None or len(ct) > len(match)):
+                match = ct
+        if match is None:
+            break
+        trailing.insert(0, match)
+        remainder = remainder[: -(len(match) + 1)]
+
+    if len(trailing) < 2 or not remainder:
+        return None
+
+    return {
+        "ligand_receptor": remainder,
+        "sender": trailing[0],
+        "receiver": trailing[1],
+        "raw": key,
+    }
+
+
+def extract_entities(report: dict, max_genes: int = DEFAULT_MAX_GENES) -> dict:
+    """Extract genes, cell types, and ligand-receptor pairs from an annotated report."""
+    cell_types = _collect_cell_types(report)
+    genes = _collect_moran_genes(report)
+
+    ligrec = []
+    section = report.get("multiqc_squidpy_ligrec_interactions")
+    if isinstance(section, dict):
+        seen = set()
+        for sample in section.get("data", {}).values():
+            if not isinstance(sample, dict):
+                continue
+            for key in sample:
+                parsed = _parse_ligrec_key(key, cell_types)
+                if parsed and parsed["ligand_receptor"] not in seen:
+                    seen.add(parsed["ligand_receptor"])
+                    ligrec.append(parsed)
+
+    return {
+        "genes": genes[:max_genes],
+        "all_genes_count": len(genes),
+        "cell_types": sorted(cell_types),
+        "ligand_receptor_pairs": ligrec,
+    }
+
 
 _TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9]{1,14}")
 _SPLIT = re.compile(r"[^A-Za-z0-9]+")

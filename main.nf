@@ -13,7 +13,6 @@ process INTERPRET {
     def home = workflow.containerEngine ? '/opt/llmize' : "${projectDir}"
     def boot = workflow.containerEngine ? "export LLMIZE_MODEL='${params.model}'\n    bash ${home}/docker/boot_ollama.sh" : ''
     def think_flag   = "${params.think}".toBoolean()        ? '--think' : '--no-think'
-    def enrich_flag  = "${params.enrich}".toBoolean()       ? '--enrich' : ''
     def review_flag  = "${params.review}".toBoolean()       ? "--review --review-passes ${params.review_passes}" : ''
     def whole_flag   = "${params.whole_report}".toBoolean() ? '--whole-report' : ''
     def synth_flag   = "${params.synthesis}".toBoolean()    ? '' : '--no-synthesis'
@@ -31,7 +30,7 @@ process INTERPRET {
         --input '${report}' \\
         --model '${params.model}' \\
         --num_ctx ${params.num_ctx} \\
-        ${think_flag} ${enrich_flag} ${review_flag} ${whole_flag} ${synth_flag} \\
+        ${think_flag} ${review_flag} ${whole_flag} ${synth_flag} \\
         ${prompt_flag} ${temp_flag} ${seed_flag} ${top_p_flag} ${top_k_flag} ${numpred_flag} \\
         --output "${report.baseName}_interpretation_\${STAMP}.md"
     """

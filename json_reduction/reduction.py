@@ -1,11 +1,69 @@
+"""Load, reduce, and annotate MultiQC JSON reports.
+
+Public API: DATA_DIR, resolve_path, load_json, save_json,
+extract_report_saved_raw_data, extract_focal_labels, annotate.
+"""
+
 import json
 import os
 
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 
-def req_annotated_filename() -> str:
-    default = "annotated_report.json"
-    user_input = input(f"\nEnter annotated report filename (*Enter* = {default}): ").strip()
-    return user_input if user_input else default
+TARGET_KEYS = ["report_saved_raw_data", "report_raw_saved_data"]
+IGNORE_KEYS = {
+    "multiqc_samplesheet": {"data_directory", "expression_profile"},
+}
+
+
+def resolve_path(user_input: str) -> str:
+    if os.path.isabs(user_input):
+        return user_input
+    cwd_path = os.path.join(os.getcwd(), user_input)
+    if os.path.exists(cwd_path):
+        return cwd_path
+    return os.path.join(DATA_DIR, user_input)
+
+
+def load_json(filepath: str) -> dict:
+    with open(filepath, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_json(data: dict, data_dir: str, filename: str, indent: int = 2) -> str:
+    output_path = os.path.join(data_dir, os.path.basename(filename))
+    os.makedirs(data_dir, exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=indent)
+    abs_path = os.path.abspath(output_path)
+    print(f"[reduction] Saved: {abs_path}")
+    return abs_path
+
+
+def extract_report_saved_raw_data(data: dict) -> dict:
+    for key in TARGET_KEYS:
+        if key in data:
+            return {key: _strip_ignored_keys(data[key])}
+    raise KeyError(
+        "Neither {} found in JSON. Available keys: {}".format(TARGET_KEYS, list(data.keys()))
+    )
+
+
+def _strip_ignored_keys(raw):
+    result = {}
+    for section, samples in raw.items():
+        ignore = IGNORE_KEYS.get(section, set())
+        if not ignore or not isinstance(samples, dict):
+            result[section] = samples
+            continue
+        cleaned_samples = {}
+        for sample_id, metrics in samples.items():
+            if isinstance(metrics, dict):
+                cleaned_samples[sample_id] = {k: v for k, v in metrics.items() if k not in ignore}
+            else:
+                cleaned_samples[sample_id] = metrics
+        result[section] = cleaned_samples
+    return result
 
 
 def _section_index(section_name):
@@ -39,7 +97,6 @@ def extract_focal_labels(full_data):
     if names:
         return names
 
-    # Fallback: dataset-level labels.
     for ds in plot.get("datasets", []) or []:
         if isinstance(ds, dict) and ds.get("label"):
             names.append(ds["label"])
@@ -54,37 +111,24 @@ def _get_focal_cell_types(data, focal_labels=None):
         [k for k in data.keys() if "spatial_neighbors" in k],
         key=_section_index,
     )
-
     for idx, section in enumerate(spatial_sections):
         if idx < len(focal_labels):
             label = focal_labels[idx]
         else:
             label = f"focal cell type {idx + 1} (unlabeled)"
         focal_types[section] = {"index": idx, "focal_cell_type": label}
-
     return focal_types
 
 
-def merge(data_path, descriptor_path, output_dir, output_filename="annotated_report.json",
-          focal_labels=None):
-
-    with open(data_path, encoding="utf-8") as f:
-        data = json.load(f)
-
-    with open(descriptor_path, encoding="utf-8") as f:
-        descriptor = json.load(f)
-
-    top_key = next(
-        (k for k in data if "saved" in k and "raw" in k),
-        None
-    )
+def annotate(reduced: dict, descriptor: dict, focal_labels=None) -> dict:
+    """Overlay descriptor metadata onto the reduced report; return the annotated report dict."""
+    top_key = next((k for k in reduced if "saved" in k and "raw" in k), None)
     if top_key is None:
         raise KeyError(
-            "Could not find report_saved_raw_data in data file. "
-            "Available keys: {}".format(list(data.keys()))
+            "Could not find report_saved_raw_data. Available keys: {}".format(list(reduced.keys()))
         )
 
-    raw = data[top_key]
+    raw = reduced[top_key]
     focal_cell_types = _get_focal_cell_types(raw, focal_labels=focal_labels)
     annotated = {}
     spatial_neighbors_parent = None
@@ -113,7 +157,7 @@ def merge(data_path, descriptor_path, output_dir, output_filename="annotated_rep
 
             spatial_children[child_key] = {
                 "focal_cell_type": focal_cell_types[section]["focal_cell_type"],
-                "data": samples
+                "data": samples,
             }
         else:
             section_schema = descriptor.get(section, {})
@@ -122,7 +166,6 @@ def merge(data_path, descriptor_path, output_dir, output_filename="annotated_rep
                 if isinstance(v, dict) and k == "sections":
                     continue
                 entry[k] = v
-
             entry["data"] = samples
             annotated[section] = entry
 
@@ -130,12 +173,4 @@ def merge(data_path, descriptor_path, output_dir, output_filename="annotated_rep
         spatial_neighbors_parent["data"] = spatial_children
         annotated["multiqc_spatial_neighbors"] = spatial_neighbors_parent
 
-    os.makedirs(output_dir, exist_ok=True)
-    output_path = os.path.join(output_dir, output_filename)
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(annotated, f, indent=2)
-
-    abs_path = os.path.abspath(output_path)
-    print("Annotated report saved.")
-    print("Location : {}".format(abs_path))
-    return abs_path
+    return annotated

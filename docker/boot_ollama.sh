@@ -1,19 +1,12 @@
 #!/usr/bin/env bash
-# Start the in-container Ollama server, wait for it, and pull the model.
-#
-# Reusable so both the image ENTRYPOINT (docker run) and the Nextflow process
-# script can call it. The server is started with nohup + disown so it survives
-# this script exiting and is reachable by later commands in the same task.
-#
-# Honours:
-#   LLMIZE_MODEL  - model tag to pull/run (default: gemma4)
-#   OLLAMA_HOST   - server/client endpoint (default: 127.0.0.1:11434)
+# Start the in-container Ollama server and pull the model. nohup + disown let the
+# server survive this script exiting so later commands in the task can reach it.
+# Honours LLMIZE_MODEL (default gemma4) and OLLAMA_HOST (default 127.0.0.1:11434).
 set -euo pipefail
 
 MODEL="${LLMIZE_MODEL:-gemma4}"
 ENDPOINT="http://${OLLAMA_HOST:-127.0.0.1:11434}"
 
-# Start the server only if one isn't already answering.
 if ! curl -sf "${ENDPOINT}/api/tags" >/dev/null 2>&1; then
     echo "[boot] starting 'ollama serve'..."
     nohup ollama serve >/tmp/ollama.log 2>&1 &
@@ -33,9 +26,8 @@ for i in $(seq 1 60); do
     fi
 done
 
-# Skip the pull if the model is already present (baked into the image, or cached
-# on a mounted volume). This is what makes an offline / air-gapped image work:
-# 'ollama pull' would otherwise contact the registry even for an existing model.
+# Skip the pull when the model is already present (baked in or volume-cached) so the
+# image works offline; 'ollama pull' would otherwise contact the registry regardless.
 if ollama list 2>/dev/null | grep -qF "${MODEL}"; then
     echo "[boot] model '${MODEL}' already present; skipping pull (offline-safe)."
 else
