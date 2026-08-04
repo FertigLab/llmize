@@ -15,6 +15,8 @@ process INTERPRET {
     script:
     def home = workflow.containerEngine ? '/opt/llmize' : "${projectDir}"
     def boot = workflow.containerEngine ? "export LLMIZE_MODEL='${params.model}'\n    bash ${home}/docker/boot_ollama.sh" : ''
+    def ollama_models_escaped = params.ollama_models_dir ? params.ollama_models_dir.toString().replace("'", "'\"'\"'") : null
+    def ollama_models_export = ollama_models_escaped ? "export OLLAMA_MODELS='${ollama_models_escaped}'" : 'export OLLAMA_MODELS="\$PWD/ollama/models"'
     def think_flag   = "${params.think}".toBoolean()        ? '--think' : '--no-think'
     def review_flag  = "${params.review}".toBoolean()       ? "--review --review-passes ${params.review_passes}" : ''
     def whole_flag   = "${params.whole_report}".toBoolean() ? '--whole-report' : ''
@@ -29,7 +31,7 @@ process INTERPRET {
     """
     export HOME="\$PWD"
     export XDG_CACHE_HOME="\$PWD/.cache"
-    export OLLAMA_MODELS="\$PWD/ollama/models"
+    ${ollama_models_export}
     mkdir -p "\$OLLAMA_MODELS" "\$XDG_CACHE_HOME"
 
     ${boot}
