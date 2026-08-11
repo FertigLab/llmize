@@ -66,8 +66,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output", "-o",
-        default=None,
-        help="Path to save the final interpreted report text. Defaults to data/<input_stem>_interpretation_<timestamp>.txt.",
+        default=".",
+        help="Path to save the final interpreted report text. Defaults to ./<input_stem>_interpretation_<timestamp>.txt.",
     )
     parser.add_argument(
         "--num_ctx",
@@ -121,11 +121,6 @@ def parse_args() -> argparse.Namespace:
         "--check",
         action="store_true",
         help="Run environment preflight checks (Ollama, models, schema) and exit.",
-    )
-    parser.add_argument(
-        "--work-dir",
-        default=".",
-        help="Working directory for saving intermediate and final output files (default: current directory).",
     )
     return parser.parse_args()
 
