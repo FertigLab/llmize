@@ -40,9 +40,9 @@ process INTERPRET {
         --input '${report}' \\
         --model '${params.model}' \\
         --num_ctx ${params.num_ctx} \\
-        --work-dir . \\
         ${think_flag} ${review_flag} ${whole_flag} ${synth_flag} \\
-        ${prompt_flag} ${temp_flag} ${seed_flag} ${top_p_flag} ${top_k_flag} ${numpred_flag} \\
+        ${prompt_flag} ${temp_flag} ${seed_flag} ${top_p_flag} \\
+        ${top_k_flag} ${numpred_flag} \\
         --output "${report.baseName}_interpretation_\${STAMP}.md"
     """
 }
