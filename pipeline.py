@@ -13,7 +13,6 @@ from json_reduction import (
     resolve_path,
     load_json,
     save_json,
-    DATA_DIR,
     extract_report_saved_raw_data,
     extract_focal_labels,
     annotate,
@@ -67,7 +66,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output", "-o",
         default=None,
-        help="Path to save the final interpreted report text. Defaults to data/<input_stem>_interpretation_<timestamp>.txt.",
+        help="Path to save the final interpreted report text. Defaults to ./<input_stem>_interpretation_<timestamp>.txt.",
     )
     parser.add_argument(
         "--num_ctx",
@@ -175,8 +174,8 @@ def run_pipeline(
     print(f"[pipeline] Reduced and annotated {len(report)} sections in memory.")
 
     if save_intermediates:
-        save_json(reduced, DATA_DIR, extracted_filename or default_output_name(input_path, prefix="extracted_"))
-        save_json(report, DATA_DIR, annotated_filename or "annotated_report.json")
+        save_json(reduced, ".", extracted_filename or default_output_name(".", prefix="extracted_"))
+        save_json(report, ".", annotated_filename or "annotated_report.json")
 
     mode = "whole report" if whole_report else "section-by-section"
     print(f"[pipeline] Calling Ollama model '{model}' ({mode})...")
@@ -201,8 +200,7 @@ def run_pipeline(
     if output_path is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         stem = os.path.splitext(os.path.basename(input_path))[0]
-        output_filename = f"{stem}_interpretation_{timestamp}.md"
-        output_path = os.path.join(DATA_DIR, output_filename)
+        output_path = f"{stem}_interpretation_{timestamp}.md"
 
     footer = build_run_footer(
         model=model, num_ctx=num_ctx, think=think, gen_options=gen_options,

@@ -53,6 +53,39 @@ python3 pipeline.py --check
 It prints a clear ✓/⚠/✗ report and exits non-zero if a required check fails.
 Optional features (e.g. ToolUniverse enrichment) only produce warnings, not failures.
 
+## Nextflow execution
+
+The Nextflow module uses an Ollama model cache directory via `OLLAMA_MODELS`.
+
+- By default, the workflow uses a task-local cache at `$PWD/ollama/models` (inside the Nextflow work directory).
+- To reuse models across runs (recommended on clusters), pass `--ollama_models_dir /path/to/persistent/models` so the container can bind-mount that directory.
+- On the first run with an empty cache, the workflow auto-pulls the model; subsequent runs reuse the cached model when using a persistent `--ollama_models_dir`.
+
+### GPU (Slurm + Apptainer)
+
+```bash
+nextflow run main.nf \
+   -profile igs \
+   --input data/multiqc_data.json \
+   --slurm_account <your-account> \
+   -w /usr/local/scratch/$USER/work \
+   -resume
+```
+
+### Override cache path (optional)
+
+Use this if your cluster requires a different location:
+
+```bash
+nextflow run main.nf \
+   -profile igs \
+   --input data/multiqc_data.json \
+   --slurm_account <your-account> \
+   --ollama_models_dir /path/to/persistent/models \
+   -w /usr/local/scratch/$USER/work \
+   -resume
+```
+
 ## Continuous integration
 
 The GitHub Actions workflow (`.github/workflows/test.yml`) runs on every pull request
