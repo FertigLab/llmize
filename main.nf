@@ -1,8 +1,8 @@
 process INTERPRET {
     tag "${report.baseName}"
     label "process_gpu"
-    resourceLimits cpus: 2, memory: 8.GB, time: '1h'
-    container 'ghcr.io/fertiglab/llmize:latest'
+    resourceLimits cpus: 2, memory: 48.GB, time: '1h'
+    container "${params.container}"
     publishDir params.outdir, mode: 'copy'
 
     input:
