@@ -57,10 +57,9 @@ Optional features (e.g. ToolUniverse enrichment) only produce warnings, not fail
 
 The Nextflow module uses an Ollama model cache directory via `OLLAMA_MODELS`.
 
-- In the `igs` and `igs_cpu` profiles, the default cache path is user-specific scratch:
-   `/usr/local/scratch/$USER/ollama/models`
-- On the first run, if the model is missing, the workflow auto-pulls it.
-- On later runs, the same model is reused from scratch and pull is skipped.
+- By default, the workflow uses a task-local cache at `$PWD/ollama/models` (inside the Nextflow work directory).
+- To reuse models across runs (recommended on clusters), pass `--ollama_models_dir /path/to/persistent/models` so the container can bind-mount that directory.
+- On the first run with an empty cache, the workflow auto-pulls the model; subsequent runs reuse the cached model when using a persistent `--ollama_models_dir`.
 
 ### GPU (Slurm + Apptainer)
 
