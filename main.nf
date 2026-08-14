@@ -7,6 +7,7 @@ process INTERPRET {
 
     input:
     path report
+    path descriptor
 
     output:
     path "*_interpretation_*.md", emit: interpretation
@@ -38,6 +39,7 @@ process INTERPRET {
     STAMP=\$(date +%Y%m%d_%H%M%S)
     python3 ${home}/pipeline.py \\
         --input '${report}' \\
+        --descriptor '${descriptor}' \\
         --model '${params.model}' \\
         --num_ctx ${params.num_ctx} \\
         ${think_flag} ${review_flag} ${whole_flag} ${synth_flag} \\
@@ -52,6 +54,7 @@ workflow {
         error "Provide --input <multiqc_data.json>"
 
     ch_input = channel.fromPath(params.input, checkIfExists: true)
+    ch_descriptor = channel.fromPath(params.descriptor, checkIfExists: true).first()
 
-    INTERPRET(ch_input)
+    INTERPRET(ch_input, ch_descriptor)
 }
