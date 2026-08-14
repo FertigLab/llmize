@@ -120,6 +120,41 @@ def _get_focal_cell_types(data, focal_labels=None):
     return focal_types
 
 
+def _curve_points(curve):
+    """Well-formed [distance, ratio] points of a co-occurrence curve, sorted by distance."""
+    points = [p for p in curve if isinstance(p, (list, tuple)) and len(p) >= 2]
+    return sorted(points, key=lambda p: p[0])
+
+
+def _cooccurrence_focal(section):
+    """Focal cell type of a co-occurrence section: the target with the highest ratio at
+    the smallest distance bin. A cell type self-co-occurs most strongly at short range, so
+    this recovers the section's focal type from the data alone (no plot metadata needed)."""
+    best, best_ratio = None, None
+    for target, curve in section.items():
+        if not (isinstance(curve, list) and curve):
+            continue
+        points = _curve_points(curve)
+        if not points:
+            continue
+        ratio = points[0][1]
+        if best_ratio is None or ratio > best_ratio:
+            best, best_ratio = target, ratio
+    return best
+
+
+def _downsample_curve(curve, max_points=8):
+    """Reduce a co-occurrence curve to at most `max_points` evenly-spaced points (keeping
+    the first and last). Collapsing all focal types into one section makes the full 49-bin
+    curves too large for the model; a few points still convey the short/long-range trend."""
+    points = _curve_points(curve)
+    n = len(points)
+    if n <= max_points:
+        return [list(p) for p in points]
+    idxs = sorted({round(i * (n - 1) / (max_points - 1)) for i in range(max_points)})
+    return [list(points[i]) for i in idxs]
+
+
 def annotate(reduced: dict, descriptor: dict, focal_labels=None) -> dict:
     """Overlay descriptor metadata onto the reduced report; return the annotated report dict."""
     top_key = next((k for k in reduced if "saved" in k and "raw" in k), None)
@@ -133,9 +168,12 @@ def annotate(reduced: dict, descriptor: dict, focal_labels=None) -> dict:
     annotated = {}
     spatial_neighbors_parent = None
     spatial_children = {}
+    cooccurrence_parent = None
+    cooccurrence_children = {}
 
     for section, samples in raw.items():
         is_spatial = "spatial_neighbors" in section
+        is_cooccurrence = "co_occurrence" in section
 
         if is_spatial and section in focal_cell_types:
             if spatial_neighbors_parent is None:
@@ -159,6 +197,24 @@ def annotate(reduced: dict, descriptor: dict, focal_labels=None) -> dict:
                 "focal_cell_type": focal_cell_types[section]["focal_cell_type"],
                 "data": samples,
             }
+        elif is_cooccurrence:
+            if cooccurrence_parent is None:
+                section_schema = dict(descriptor.get("multiqc_co_occurrence", {}))
+                cooccurrence_parent = {
+                    k: v for k, v in section_schema.items()
+                    if not (isinstance(v, dict) and k == "sections")
+                }
+            focal = _cooccurrence_focal(samples) or f"focal cell type {len(cooccurrence_children) + 1} (unlabeled)"
+            child_key = focal
+            dup = 2
+            while child_key in cooccurrence_children:
+                child_key = f"{focal} ({dup})"
+                dup += 1
+            cooccurrence_children[child_key] = {
+                "focal_cell_type": focal,
+                "data": {t: _downsample_curve(c) for t, c in samples.items()
+                         if isinstance(c, list)},
+            }
         else:
             section_schema = descriptor.get(section, {})
             entry = {}
@@ -172,5 +228,9 @@ def annotate(reduced: dict, descriptor: dict, focal_labels=None) -> dict:
     if spatial_neighbors_parent is not None:
         spatial_neighbors_parent["data"] = spatial_children
         annotated["multiqc_spatial_neighbors"] = spatial_neighbors_parent
+
+    if cooccurrence_parent is not None:
+        cooccurrence_parent["data"] = cooccurrence_children
+        annotated["multiqc_co_occurrence"] = cooccurrence_parent
 
     return annotated

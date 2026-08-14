@@ -140,6 +140,14 @@ def _collect_report_labels(report: dict) -> set:
                 for sample in sub.get("data", {}).values():
                     if isinstance(sample, dict):
                         labels.update(sample.keys())
+        elif name == "multiqc_co_occurrence":
+            for sub in data.values():
+                if not isinstance(sub, dict):
+                    continue
+                focal = sub.get("focal_cell_type")
+                if isinstance(focal, str):
+                    labels.add(focal)
+                labels.update(sub.get("data", {}).keys())
         elif name.endswith("_ct") or "deconvolved" in name:
             for sample in data.values():
                 if isinstance(sample, dict):
