@@ -24,10 +24,11 @@
     "value_type": "float - higher = stronger inferred ligand-receptor interaction"
   },
   "multiqc_co_occurrence": {
-    "description": "Mean squidpy co-occurrence: how the probability of each cell type changes with spatial distance from a focal cell type, as a ratio to that cell type's overall frequency. Each section (multiqc_co_occurrence, _1, _2, ...) is conditioned on one focal cell type. Ratio > 1 at a distance = enriched near the focal type there; < 1 = depleted; ~1 = as expected by chance. Report the overall trend (enriched/depleted, and at short vs long range) rather than every distance value.",
-    "structure": "focal_cell_type to [ [distance_bin, ratio], ... ] (a curve over increasing distance)",
-    "key_type": "Focal cell type names. 'NA' = spots with no valid assignment.",
-    "value_type": "list of [distance_bin, ratio]; ratio > 1 = enriched at that distance, < 1 = depleted"
+    "description": "Mean squidpy co-occurrence: how the probability of finding each target cell type changes with spatial distance from a focal cell type, as a ratio to that target's overall frequency. The section is split by focal cell type (one entry per focal type, keyed by its name); a focal type self-co-occurs most strongly at short range, which is how each entry's focal type is identified. Ratio > 1 at a distance = that target is enriched near the focal type there; < 1 = depleted; ~1 = as expected by chance.",
+    "structure": "focal_cell_type_name to { focal_cell_type, data: { target_cell_type: [ [distance_bin, ratio], ... ] } }",
+    "key_type": "Focal cell type names (e.g. Tumor, Myeloid, Lymphoid, Junk, Non immune). 'NA' = spots with no valid assignment.",
+    "value_type": "per target cell type, a curve of [distance_bin, ratio]; ratio > 1 = enriched at that distance, < 1 = depleted",
+    "analysis_instructions": "Write at most ONE line per focal cell type. On each line name only the 1-2 target cell types most enriched (highest ratio) and the 1-2 most depleted (lowest ratio) in that focal type's neighborhood, and state whether enrichment is strongest at short range and decays or instead builds with distance. Cite 2-3 representative ratios per line (e.g. the strongest short-range value and its far-range value). Collapse every target that stays near ratio 1 into the phrase 'others near chance' - do NOT list them or enumerate distance bins. After the per-focal lines, add at most two sentences naming only the strongest cross-focal patterns (which pairs are mutually enriched or mutually excluded)."
   },
   "multiqc_samplesheet": {
     "description": "The sample sheet provided as input to the pipeline. Contains per-sample metadata columns that vary by study (e.g. treatment response, timepoint, tissue region, sample type, case/control). Grouping columns are detected automatically from whatever columns are present; columns containing file paths (data_directory, expression_profile) are excluded.",
@@ -89,13 +90,13 @@
     "structure": "sample_id to { GENE-I: score }",
     "key_format": "GENE_NAME-I (example: 'CXCL14-I', 'HLA-DRB1-I')",
     "value_type": "float, range 0-1 - higher = expression more spatially clustered across tissue spots",
-    "analysis_instructions": "Assess whether spatial clustering differs systematically between the sample-metadata groups present. If there is no clear, consistent group-level difference, state that plainly (e.g. 'Moran's I scores do not differ systematically between groups') and do NOT enumerate per-sample scores gene by gene. Name only the few genes (if any) with a notable and consistent group difference, and otherwise describe the overall pattern briefly."
+    "analysis_instructions": "Assess whether spatial clustering differs systematically between the sample-metadata groups present; if it does not, state that plainly (e.g. 'Moran's I scores do not differ systematically between groups'). Name at most the 3 genes with the most notable and consistent group difference (if any) and cite their scores; otherwise describe the overall pattern in 1-2 sentences. Do NOT enumerate per-sample scores gene by gene or print a full per-sample score table."
   },
   "multiqc_spatial_neighbors": {
     "description": "Cell type immediate neighborhood across samples. Each section (multiqc_spatial_neighbors, _1, _2, ...) represents one focal cell type and counts how many neighbors of each type surround it. Focal cell types are dynamically generated during merge based on actual data.",
     "structure": "sample_id to { neighbor_cell_type: count }",
     "key_type": "Cell type names. 'NA' = spots with no valid neighborhood assignment.",
     "value_type": "float - number of immediate neighbors of that cell type",
-    "analysis_instructions": "Compare groups for difference and similarities. Also estimate mean neighborhood frequency without 'self' neighbours, this way the border of cell type clusters can be assessed."
+    "analysis_instructions": "For each focal cell type report at most the 2-3 most informative neighbor findings - the dominant neighbor type and any notable group difference - citing the key percentages. Do NOT list every neighbor type or print a per-sample table. Then give the mean non-self neighborhood frequency per focal type (to assess cluster borders) as one compact line or small table. Keep to the strongest findings, not exhaustive per-sample enumeration."
   }
 }
