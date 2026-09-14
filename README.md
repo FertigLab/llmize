@@ -1,7 +1,10 @@
 # llmize
 
 Reduce, annotate, and interpret MultiQC spatial-transcriptomics reports with a
-local LLM (via Ollama).
+local LLM (via Ollama). The pipeline is built around MultiQC's report structure but
+also accepts any JSON with section-keyed data — MultiQC-specific handling (sample sheet,
+spatial-neighbors/co-occurrence merging) kicks in automatically
+when those sections are present, and passes other data through as-is.
 
 Interpretation runs **entirely on your own machine** — the model and inference are
 local, and nothing is sent to any external service.
@@ -34,7 +37,7 @@ schema:
 ```bash
 python3 check_env.py
 # or, equivalently:
-python3 pipeline.py --check
+python3 llmize.py --check
 ```
 
 It prints a clear ✓/⚠/✗ report and exits non-zero if a required check fails.
@@ -100,7 +103,7 @@ are set explicitly, e.g. `--think false` or `--review true`.
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `--input` | — (required) | Path to the MultiQC `*_data.json` report. |
+| `--input` | — (required) | Path to the MultiQC `*_data.json` report, or any JSON with section-keyed data. |
 | `--descriptor` | bundled schema | Descriptor schema JSON; override to use your own (see below). |
 | `--model` | `gemma4` | Ollama model name. |
 | `--outdir` | `results` | Directory for the output interpretation. |
@@ -122,9 +125,9 @@ are covered under **Nextflow execution** above.
 
 ## Where to place your files
 
-- **QC report** — your MultiQC `*_data.json`. Put it anywhere and point `--input` at
+- **QC report** — your MultiQC `*_data.json` (or any section-keyed JSON). Put it anywhere and point `--input` at
   it; the examples keep reports in `data/`.
-- **Descriptor schema** — the default ships at `json_reduction/descriptor_schema.json`
+- **Descriptor schema** — the default ships at `ingest/descriptor_schema.json`
   and is used automatically. To describe your own report sections, copy that file, edit
   the entries, and pass it with `--descriptor /path/to/your_schema.json`.
 - **Output** — the interpretation `.md` is written to `results/` (or wherever

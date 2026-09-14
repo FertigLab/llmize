@@ -9,7 +9,7 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from json_reduction import (
+from ingest import (
     resolve_path,
     load_json,
     save_json,
@@ -24,7 +24,7 @@ from interpret import (
     review_interpretation,
 )
 
-DEFAULT_DESCRIPTOR = os.path.join(PROJECT_ROOT, "json_reduction", "descriptor_schema.json")
+DEFAULT_DESCRIPTOR = os.path.join(PROJECT_ROOT, "ingest", "descriptor_schema.json")
 
 
 def parse_args() -> argparse.Namespace:
@@ -34,7 +34,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--input", "-i",
         required=True,
-        help="Path to the raw MultiQC JSON input file.",
+        help="Path to the raw JSON input file (MultiQC report, or any JSON with section-keyed data).",
     )
     parser.add_argument(
         "--model", "-m",
@@ -46,7 +46,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--descriptor",
         default=DEFAULT_DESCRIPTOR,
-        help="Path to the descriptor schema JSON file.",
+        help="Path to a descriptor schema JSON file, keyed by top-level section name. "
+             "Optional: sections with no matching entry pass through unannotated.",
     )
     parser.add_argument(
         "--save-intermediates",
@@ -165,11 +166,11 @@ def run_pipeline(
 
     data = load_json(input_path)
     reduced = extract_report_saved_raw_data(data)
-    # Recover real focal cell types from the raw report's plot metadata.
+    # Recover real focal cell types from the raw report's plot metadata (MultiQC-only; no-op otherwise).
     focal_labels = extract_focal_labels(data)
     if focal_labels:
         print(f"[pipeline] Recovered spatial-neighbors focal cell types: {focal_labels}")
-    descriptor = load_json(descriptor_path)
+    descriptor = load_json(descriptor_path) if descriptor_path and os.path.exists(descriptor_path) else {}
     report = annotate(reduced, descriptor, focal_labels=focal_labels)
     print(f"[pipeline] Reduced and annotated {len(report)} sections in memory.")
 
