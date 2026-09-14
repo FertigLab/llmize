@@ -107,89 +107,6 @@ def build_samplesheet_context(report: dict) -> str:
     )
 
 
-GLOSSARY_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "json_reduction", "cell_type_glossary.json"
-)
-
-
-def load_glossary(path: str = GLOSSARY_PATH) -> dict:
-    """Load the local cell-type/abbreviation glossary, or {} if unavailable."""
-    try:
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-
-def _collect_report_labels(report: dict) -> set:
-    """Collect cell-type labels that appear in the report's cell-type/spatial sections."""
-    labels = set()
-    for name, section in report.items():
-        if not isinstance(section, dict):
-            continue
-        data = section.get("data", {})
-        if not isinstance(data, dict):
-            continue
-        if name == "multiqc_spatial_neighbors":
-            for sub in data.values():
-                if not isinstance(sub, dict):
-                    continue
-                focal = sub.get("focal_cell_type")
-                if isinstance(focal, str):
-                    labels.add(focal)
-                for sample in sub.get("data", {}).values():
-                    if isinstance(sample, dict):
-                        labels.update(sample.keys())
-        elif name == "multiqc_co_occurrence":
-            for sub in data.values():
-                if not isinstance(sub, dict):
-                    continue
-                focal = sub.get("focal_cell_type")
-                if isinstance(focal, str):
-                    labels.add(focal)
-                labels.update(sub.get("data", {}).keys())
-        elif name.endswith("_ct") or "deconvolved" in name:
-            for sample in data.values():
-                if isinstance(sample, dict):
-                    labels.update(sample.keys())
-    return {l for l in labels if isinstance(l, str)}
-
-
-def build_glossary_context(report: dict, glossary: dict = None) -> str:
-    """Glossary block defining the cell-type labels present; warns on undefined ones."""
-    glossary = glossary if glossary is not None else load_glossary()
-    if not glossary:
-        return ""
-
-    labels = _collect_report_labels(report)
-    by_lower = {k.lower(): v for k, v in glossary.items()}
-
-    defined = {}
-    undefined = []
-    for label in sorted(labels):
-        definition = by_lower.get(label.lower())
-        if definition:
-            defined[label] = definition
-        else:
-            undefined.append(label)
-
-    if undefined:
-        print(f"[glossary] {len(undefined)} label(s) have no definition (add to "
-              f"cell_type_glossary.json): {', '.join(undefined)}")
-
-    if not defined:
-        return ""
-
-    lines = ["\n\n--- CELL-TYPE GLOSSARY (definitions for labels in this report) ---"]
-    for label, definition in defined.items():
-        lines.append(f"- {label}: {definition}")
-    lines.append(
-        "Use these definitions whenever a label appears. For any label NOT listed here, "
-        "use it verbatim and do not infer or expand what it stands for."
-    )
-    return "\n".join(lines)
-
-
 def _percentages(counts: dict) -> dict:
     """Return {key: percent-of-total} for a flat {key: count} mapping (1 d.p.)."""
     total = sum(v for v in counts.values() if isinstance(v, (int, float)))
@@ -553,8 +470,7 @@ def interpret_report(
 ) -> str:
     """Interpret the report as one or more chunks; a single chunk is the whole report."""
     samplesheet_context = build_samplesheet_context(report)
-    glossary_context = build_glossary_context(report)
-    system = (SYSTEM_PROMPT + samplesheet_context + glossary_context
+    system = (SYSTEM_PROMPT + samplesheet_context
               + build_user_instruction(user_instruction))
     groups = sample_groups(report)
 
