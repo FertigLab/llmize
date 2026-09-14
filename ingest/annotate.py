@@ -1,69 +1,8 @@
-"""Load, reduce, and annotate MultiQC JSON reports.
+"""Annotation step: overlay descriptor metadata onto a flat, already-extracted report.
 
-Public API: DATA_DIR, resolve_path, load_json, save_json,
-extract_report_saved_raw_data, extract_focal_labels, annotate.
+Also opportunistically merges MultiQC's spatial-neighbors/co-occurrence sections (by
+name pattern) when present; it's a no-op on generic JSON that lacks them.
 """
-
-import json
-import os
-
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = os.path.join(PROJECT_ROOT, "data")
-
-TARGET_KEYS = ["report_saved_raw_data", "report_raw_saved_data"]
-IGNORE_KEYS = {
-    "multiqc_samplesheet": {"data_directory", "expression_profile"},
-}
-
-
-def resolve_path(user_input: str) -> str:
-    if os.path.isabs(user_input):
-        return user_input
-    cwd_path = os.path.join(os.getcwd(), user_input)
-    if os.path.exists(cwd_path):
-        return cwd_path
-    return os.path.join(DATA_DIR, user_input)
-
-
-def load_json(filepath: str) -> dict:
-    with open(filepath, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def save_json(data: dict, data_dir: str, filename: str, indent: int = 2) -> str:
-    output_path = os.path.join(data_dir, os.path.basename(filename))
-    os.makedirs(data_dir, exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=indent)
-    abs_path = os.path.abspath(output_path)
-    print(f"[reduction] Saved: {abs_path}")
-    return abs_path
-
-
-def extract_report_saved_raw_data(data: dict) -> dict:
-    for key in TARGET_KEYS:
-        if key in data:
-            return {key: _strip_ignored_keys(data[key])}
-    raise KeyError(
-        "Neither {} found in JSON. Available keys: {}".format(TARGET_KEYS, list(data.keys()))
-    )
-
-
-def _strip_ignored_keys(raw):
-    result = {}
-    for section, samples in raw.items():
-        ignore = IGNORE_KEYS.get(section, set())
-        if not ignore or not isinstance(samples, dict):
-            result[section] = samples
-            continue
-        cleaned_samples = {}
-        for sample_id, metrics in samples.items():
-            if isinstance(metrics, dict):
-                cleaned_samples[sample_id] = {k: v for k, v in metrics.items() if k not in ignore}
-            else:
-                cleaned_samples[sample_id] = metrics
-        result[section] = cleaned_samples
-    return result
 
 
 def _section_index(section_name):
@@ -155,15 +94,12 @@ def _downsample_curve(curve, max_points=8):
     return [list(points[i]) for i in idxs]
 
 
-def annotate(reduced: dict, descriptor: dict, focal_labels=None) -> dict:
-    """Overlay descriptor metadata onto the reduced report; return the annotated report dict."""
-    top_key = next((k for k in reduced if "saved" in k and "raw" in k), None)
-    if top_key is None:
-        raise KeyError(
-            "Could not find report_saved_raw_data. Available keys: {}".format(list(reduced.keys()))
-        )
-
-    raw = reduced[top_key]
+def annotate(reduced: dict, descriptor: dict = None, focal_labels=None) -> dict:
+    """Overlay descriptor metadata onto the reduced report; return the annotated report dict.
+    `reduced` is a flat {section_name: payload} dict (MultiQC or generic). `descriptor` is
+    optional; sections with no matching entry pass through with just their `data`."""
+    descriptor = descriptor or {}
+    raw = reduced
     focal_cell_types = _get_focal_cell_types(raw, focal_labels=focal_labels)
     annotated = {}
     spatial_neighbors_parent = None

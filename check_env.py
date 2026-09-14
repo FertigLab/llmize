@@ -74,13 +74,14 @@ def _ollama_server_and_models() -> list:
 
 
 def _descriptor_schema() -> Check:
-    path = os.path.join(PROJECT_ROOT, "json_reduction", "descriptor_schema.json")
+    # Optional: annotate() falls back to {} and sections pass through unannotated if it's missing.
+    path = os.path.join(PROJECT_ROOT, "ingest", "descriptor_schema.json")
     if os.path.exists(path):
-        return Check("Descriptor schema", OK, "json_reduction/descriptor_schema.json present", required=True)
+        return Check("Descriptor schema", OK, "ingest/descriptor_schema.json present", required=False)
     return Check(
-        "Descriptor schema", FAIL,
-        "json_reduction/descriptor_schema.json is missing — annotation will fail.",
-        required=True,
+        "Descriptor schema", WARN,
+        "ingest/descriptor_schema.json is missing — sections will pass through unannotated.",
+        required=False,
     )
 
 
