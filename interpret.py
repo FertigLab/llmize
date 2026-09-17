@@ -32,8 +32,8 @@ Style and register (apply throughout):
   ($...$, \\text{}, \\mathbf{}) or emoji.
 - Be concise: do not restate the section name or descriptor, and do not repeat the same
   adjective across sentences.
-- If a label or abbreviation's meaning is not provided, use it verbatim; do not infer or
-  expand what it stands for.
+- If a label or abbreviation's meaning is not provided, and it is not a commonly known 
+  acronym, use it verbatim; do not infer or expand what it stands for.
 """
 
 EVIDENCE_RULES = """
