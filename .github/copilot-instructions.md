@@ -20,11 +20,6 @@ python3 -m unittest discover tests
 python3 llmize.py --input data/multiqc_data.json --model gemma4 --num_ctx 16384
 ```
 
-### Run only the json reduction step (for debugging)
-```bash
-python3 ingest/main.py
-```
-
 There is no lint configuration in this repository. CI currently installs dependencies, runs `python3 -m compileall ...`, `python3 -m unittest discover tests`, and runs `python3 check_env.py` in informational mode. `tests/` uses stdlib `unittest` (no extra dependency) and currently covers `ingest`'s extract/annotate MultiQC-unwrap and generic-JSON-passthrough behavior.
 
 ## High-level architecture
