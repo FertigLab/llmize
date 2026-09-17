@@ -37,7 +37,7 @@ process INTERPRET {
     ${boot}
 
     STAMP=\$(date +%Y%m%d_%H%M%S)
-    python3 ${home}/pipeline.py \\
+    python3 ${home}/llmize.py \\
         --input '${report}' \\
         --descriptor '${descriptor}' \\
         --model '${params.model}' \\
@@ -51,7 +51,7 @@ process INTERPRET {
 
 workflow {
     if( !params.input )
-        error "Provide --input <multiqc_data.json>"
+        error "Provide --input <path to input JSON file>"
 
     ch_input = channel.fromPath(params.input, checkIfExists: true)
     ch_descriptor = channel.fromPath(params.descriptor, checkIfExists: true).first()

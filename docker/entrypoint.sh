@@ -6,6 +6,6 @@ set -euo pipefail
 source /opt/llmize/docker/boot_ollama.sh
 
 if [ "$#" -eq 0 ]; then
-    exec python3 /opt/llmize/pipeline.py --check
+    exec python3 /opt/llmize/llmize.py --check
 fi
 exec "$@"

@@ -1,16 +1,77 @@
 # llmize
 
 Reduce, annotate, and interpret MultiQC spatial-transcriptomics reports with a
-local LLM (via Ollama).
+local LLM (via Ollama). The tool is built around MultiQC's report structure but
+also accepts any JSON with section-keyed data — MultiQC-specific handling (sample
+sheet, spatial-neighbors/co-occurrence merging) kicks in automatically when those
+sections are present, and other data passes through as-is.
 
 Interpretation runs **entirely on your own machine** — the model and inference are
 local, and nothing is sent to any external service.
 
-## Setup
+There are two ways to run it:
+- **Nextflow (recommended)** — runs in a container with Ollama and Python deps
+  already baked in; no local setup beyond Nextflow itself and a container engine.
+- **Directly with Python** — useful for local development/debugging; needs a
+  local Python environment and a locally running Ollama.
+
+## Run with Nextflow
+
+```bash
+nextflow run main.nf --input data/multiqc_data.json
+```
+
+To steer the model with your own instruction, add `--prompt`:
+
+```bash
+nextflow run main.nf --input data/multiqc_data.json \
+   --prompt "Summarize immune infiltration and flag any tumor-immune interactions."
+```
+
+By default this uses the `docker` profile (see `nextflow.config`), which pulls
+`ghcr.io/fertiglab/llmize:latest` and boots Ollama inside the container — you
+don't need Ollama or the Python dependencies installed on your host for this path.
+
+### GPU (Slurm + Apptainer)
+
+```bash
+nextflow run main.nf \
+   -profile igs \
+   --input data/multiqc_data.json \
+   --slurm_account <your-account> \
+   -w /usr/local/scratch/$USER/work \
+   -resume
+```
+
+### Model cache
+
+The Nextflow module uses an Ollama model cache directory via `OLLAMA_MODELS`.
+
+- By default, the workflow uses a task-local cache at `$PWD/ollama/models` (inside the Nextflow work directory).
+- To reuse models across runs (recommended on clusters), pass `--ollama_models_dir /path/to/persistent/models` so the container can bind-mount that directory.
+- On the first run with an empty cache, the workflow auto-pulls the model; subsequent runs reuse the cached model when using a persistent `--ollama_models_dir`.
+
+```bash
+nextflow run main.nf \
+   -profile igs \
+   --input data/multiqc_data.json \
+   --slurm_account <your-account> \
+   --ollama_models_dir /path/to/persistent/models \
+   -w /usr/local/scratch/$USER/work \
+   -resume
+```
+
+### Native profile (no container)
+
+`-profile native` runs `llmize.py` directly on the host instead of in a
+container, so it needs the same local setup as "Run directly with Python" below
+(Ollama installed and running, Python dependencies installed).
+
+## Run directly with Python
 
 ### 1. Prerequisites
 - **Ollama (runs locally).** Install it from https://ollama.com/download
-  (or `brew install ollama` on macOS). For a headless/CLI setup, start 
+  (or `brew install ollama` on macOS). For a headless/CLI setup, start
   it once with `ollama serve`.
   Then download a model **once** (this single step needs internet):
   ```bash
@@ -34,64 +95,36 @@ schema:
 ```bash
 python3 check_env.py
 # or, equivalently:
-python3 pipeline.py --check
+python3 llmize.py --check
 ```
 
 It prints a clear ✓/⚠/✗ report and exits non-zero if a required check fails.
 
-## Run the pipeline
-
-Run the interpretation with Nextflow. A simple run only needs the input report:
+### 4. Run it
 
 ```bash
-nextflow run main.nf --input data/multiqc_data.json
+python3 llmize.py --input data/multiqc_data.json --model gemma4
 ```
 
-To steer the model with your own instruction, add `--prompt`:
+Common flags (see `python3 llmize.py --help` for the full list):
 
 ```bash
-nextflow run main.nf --input data/multiqc_data.json \
-   --prompt "Summarize immune infiltration and flag any tumor-immune interactions."
+python3 llmize.py --input data/multiqc_data.json \
+   --prompt "Summarize immune infiltration and flag any tumor-immune interactions." \
+   --review --output my_interpretation.md
 ```
 
-## Nextflow execution
-
-The Nextflow module uses an Ollama model cache directory via `OLLAMA_MODELS`.
-
-- By default, the workflow uses a task-local cache at `$PWD/ollama/models` (inside the Nextflow work directory).
-- To reuse models across runs (recommended on clusters), pass `--ollama_models_dir /path/to/persistent/models` so the container can bind-mount that directory.
-- On the first run with an empty cache, the workflow auto-pulls the model; subsequent runs reuse the cached model when using a persistent `--ollama_models_dir`.
-
-### GPU (Slurm + Apptainer)
-
-```bash
-nextflow run main.nf \
-   -profile igs \
-   --input data/multiqc_data.json \
-   --slurm_account <your-account> \
-   -w /usr/local/scratch/$USER/work \
-   -resume
-```
-
-### Override cache path (optional)
-
-Use this if your cluster requires a different location:
-
-```bash
-nextflow run main.nf \
-   -profile igs \
-   --input data/multiqc_data.json \
-   --slurm_account <your-account> \
-   --ollama_models_dir /path/to/persistent/models \
-   -w /usr/local/scratch/$USER/work \
-   -resume
-```
+Note that `llmize.py`'s own flags use hyphens and differ slightly from the
+Nextflow parameter names below (e.g. `--whole-report`/`--no-synthesis` instead
+of `--whole_report`/`--synthesis false`).
 
 ## Continuous integration
 
 The GitHub Actions workflow (`.github/workflows/test.yml`) runs on every pull request
-to `main`. Because CI runners have no Ollama server, the required checks are limited to installing
-dependencies across Python 3.9 / 3.11 / 3.12.
+to `main`, across Python 3.9 / 3.11 / 3.12. Because CI runners have no Ollama server,
+it installs dependencies, byte-compiles all modules, runs the unit test suite
+(`python -m unittest discover tests`), and runs `check_env.py` informationally
+(non-blocking, since there's no local Ollama service in CI).
 
 ## Parameters
 
@@ -100,7 +133,7 @@ are set explicitly, e.g. `--think false` or `--review true`.
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `--input` | — (required) | Path to the MultiQC `*_data.json` report. |
+| `--input` | — (required) | Path to the MultiQC `*_data.json` report, or any JSON with section-keyed data. |
 | `--descriptor` | bundled schema | Descriptor schema JSON; override to use your own (see below). |
 | `--model` | `gemma4` | Ollama model name. |
 | `--outdir` | `results` | Directory for the output interpretation. |
@@ -118,13 +151,15 @@ are set explicitly, e.g. `--think false` or `--review true`.
 | `--review_passes` | `2` | Maximum review passes (used with `--review true`). |
 
 Execution/infrastructure parameters (`--container`, `--ollama_models_dir`, profiles)
-are covered under **Nextflow execution** above.
+are covered under **Run with Nextflow** above. These are the Nextflow parameter
+names (see `nextflow.config`); when running `llmize.py` directly, use `--help` to
+see its own flag names.
 
 ## Where to place your files
 
-- **QC report** — your MultiQC `*_data.json`. Put it anywhere and point `--input` at
+- **QC report** — your MultiQC `*_data.json` (or any section-keyed JSON). Put it anywhere and point `--input` at
   it; the examples keep reports in `data/`.
-- **Descriptor schema** — the default ships at `json_reduction/descriptor_schema.json`
+- **Descriptor schema** — the default ships at `ingest/descriptor_schema.json`
   and is used automatically. To describe your own report sections, copy that file, edit
   the entries, and pass it with `--descriptor /path/to/your_schema.json`.
 - **Output** — the interpretation `.md` is written to `results/` (or wherever

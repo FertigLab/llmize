@@ -29,7 +29,10 @@ jobs:
           python -m pip install -r requirements.txt
 
       - name: Byte-compile all modules (syntax check)
-        run: python -m compileall pipeline.py interpret.py enrich.py check_env.py json_reduction
+        run: python -m compileall llmize.py interpret.py check_env.py ingest
+
+      - name: Run unit tests
+        run: python -m unittest discover tests
 
       - name: Environment doctor (informational - no Ollama service in CI)
         continue-on-error: true

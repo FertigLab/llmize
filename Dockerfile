@@ -29,4 +29,4 @@ RUN mkdir -p /opt/llmize/data && chmod -R a+rwX /opt/llmize/data \
  && chmod +x docker/boot_ollama.sh docker/entrypoint.sh
 
 ENTRYPOINT ["/opt/llmize/docker/entrypoint.sh"]
-CMD ["python3", "pipeline.py", "--check"]
+CMD ["python3", "llmize.py", "--check"]
