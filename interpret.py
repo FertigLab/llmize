@@ -376,6 +376,30 @@ one by one. Output only the summary prose — do NOT add your own title or markd
 heading.
 """ + STYLE_GUIDE + EVIDENCE_RULES
 
+TEXT_SYNTHESIS_SYSTEM_PROMPT = """You are an expert bioinformatician. You are given
+the per-section analyses of a plain-text report produced by a bioinformatics
+tool or workflow.
+
+Synthesize them into one concise executive summary of a few short paragraphs.
+Cover:
+- the overall picture and whether the report appears internally consistent,
+- any notable patterns, outliers, or data-quality issues surfaced across sections,
+- the most important quantitative findings, citing key numbers and percentages,
+- findings across sections that are consistent with each other, or contradict each other,
+- any well-supported group differences only when the report itself provides the needed
+  grouping context; otherwise focus on overall patterns and limitations.
+
+Do not repeat each section verbatim or list sections one by one. Output only the
+summary prose — do NOT add your own title or markdown heading.
+""" + STYLE_GUIDE + EVIDENCE_RULES
+
+TEXT_AS_IS_SYNTHESIS_SYSTEM_PROMPT = """You are an expert bioinformatician. You are
+given the per-section analyses of a plain-text report produced by a bioinformatics
+tool or workflow. The report's text already carries its own analysis instructions
+and formatting guidance, so preserve that guidance while writing one concise
+executive summary across the sections. Output only the summary prose — do NOT add
+your own title or markdown heading."""
+
 
 def synthesize_sections(
     responses: list,
@@ -384,6 +408,7 @@ def synthesize_sections(
     samplesheet_context: str = "",
     think: bool = True,
     gen_options: dict = None,
+    system_prompt: str = SYNTHESIS_SYSTEM_PROMPT,
 ) -> tuple:
     """Final call condensing the section analyses into a summary; returns (content, thinking)."""
     combined = "\n\n".join(f"### {name}\n{text.strip()}" for name, text in responses)
@@ -395,7 +420,7 @@ def synthesize_sections(
     return chat_ollama(
         prompt,
         model=model,
-        system=SYNTHESIS_SYSTEM_PROMPT + samplesheet_context,
+        system=system_prompt + samplesheet_context,
         num_ctx=num_ctx,
         think=think,
         gen_options=gen_options,
@@ -501,6 +526,7 @@ def _run_chunks(
     gen_options: dict,
     samplesheet_context: str = "",
     title: str = None,
+    synthesis_system_prompt: str = SYNTHESIS_SYSTEM_PROMPT,
 ) -> str:
     """Run each (name, prompt) chunk through the model, then optionally synthesize."""
     model = ensure_model(model)
@@ -527,7 +553,13 @@ def _run_chunks(
         print("[interpret] Synthesizing executive summary from per-section analyses...", flush=True)
         started = time.monotonic()
         summary, summary_thinking = synthesize_sections(
-            responses, model, num_ctx, samplesheet_context, think=think, gen_options=gen_options
+            responses,
+            model,
+            num_ctx,
+            samplesheet_context,
+            think=think,
+            gen_options=gen_options,
+            system_prompt=synthesis_system_prompt,
         )
         print(f"[interpret] Synthesis done in {time.monotonic() - started:.1f}s", flush=True)
         print_thinking("Overview (synthesis)", summary_thinking)
@@ -574,6 +606,9 @@ def interpret_text_report(
     own analysis instructions; it does not affect whole-report vs. heading-split chunking.
     """
     base_prompt = TEXT_AS_IS_SYSTEM_PROMPT if as_is else TEXT_SYSTEM_PROMPT
+    synthesis_prompt = (
+        TEXT_AS_IS_SYNTHESIS_SYSTEM_PROMPT if as_is else TEXT_SYNTHESIS_SYSTEM_PROMPT
+    )
     system = base_prompt + build_user_instruction(user_instruction)
     if whole_report:
         chunks = [("Whole report", build_prompt_text(text))]
@@ -588,6 +623,7 @@ def interpret_text_report(
     return _run_chunks(
         chunks, model, system, num_ctx, synthesize_final, think, gen_options,
         title="Report Interpretation",
+        synthesis_system_prompt=synthesis_prompt,
     )
 
 

@@ -86,6 +86,12 @@ class TestSplitTextSections(unittest.TestCase):
         self.assertEqual(sections["Section"], {"data": "first"})
         self.assertEqual(sections["Section (2)"], {"data": "second"})
 
+    def test_preamble_heading_collision_gets_suffixed(self):
+        text = "intro text\n## Preamble\nbody text\n"
+        sections = split_text_sections(text)
+        self.assertEqual(sections["Preamble"], {"data": "intro text"})
+        self.assertEqual(sections["Preamble (2)"], {"data": "body text"})
+
     def test_no_headings_falls_back_to_full_report(self):
         text = "just plain text with no headings\n"
         sections = split_text_sections(text)

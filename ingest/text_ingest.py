@@ -18,8 +18,7 @@ def split_text_sections(text: str) -> dict:
     If no headings are found at all, the whole text is returned as one
     "Full report" section (or {} if the text is blank).
     """
-    sections = {}
-    order = []
+    sections = []
     current_name = None
     current_lines = []
     preamble_lines = []
@@ -27,13 +26,7 @@ def split_text_sections(text: str) -> dict:
     def flush():
         if current_name is None:
             return
-        name = current_name
-        suffix = 2
-        while name in sections:
-            name = f"{current_name} ({suffix})"
-            suffix += 1
-        sections[name] = "\n".join(current_lines).strip()
-        order.append(name)
+        sections.append((current_name, "\n".join(current_lines).strip()))
 
     for line in text.splitlines():
         match = _HEADER_RE.match(line)
@@ -53,9 +46,18 @@ def split_text_sections(text: str) -> dict:
         return {"Full report": {"data": stripped}} if stripped else {}
 
     result = {}
+
+    def add_section(name: str, body: str):
+        unique_name = name
+        suffix = 2
+        while unique_name in result:
+            unique_name = f"{name} ({suffix})"
+            suffix += 1
+        result[unique_name] = {"data": body}
+
     preamble = "\n".join(preamble_lines).strip()
     if preamble:
-        result["Preamble"] = {"data": preamble}
-    for name in order:
-        result[name] = {"data": sections[name]}
+        add_section("Preamble", preamble)
+    for name, body in sections:
+        add_section(name, body)
     return result
