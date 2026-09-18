@@ -13,12 +13,14 @@ from ingest import (
     resolve_path,
     load_json,
     save_json,
+    read_text,
     extract_report_saved_raw_data,
     extract_focal_labels,
     annotate,
 )
 from interpret import (
     interpret_report,
+    interpret_text_report,
     build_gen_options,
     build_run_footer,
     review_interpretation,
@@ -34,7 +36,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--input", "-i",
         required=True,
-        help="Path to the raw JSON input file (MultiQC report, or any JSON with section-keyed data).",
+        help="Path to the input file: JSON (MultiQC report, or any section-keyed JSON) "
+             "is auto-detected by a .json extension; anything else is treated as plain "
+             "text (e.g. MultiQC's llms-full.txt).",
     )
     parser.add_argument(
         "--model", "-m",
@@ -79,6 +83,13 @@ def parse_args() -> argparse.Namespace:
         "--whole-report",
         action="store_true",
         help="Interpret the whole report in one call instead of section-by-section.",
+    )
+    parser.add_argument(
+        "--as-is",
+        action="store_true",
+        help="Plain-text input only: skip llmize's style guide and evidence rules, "
+             "assuming the text already carries its own analysis instructions "
+             "(e.g. MultiQC's llms-full.txt). Ignored for JSON input.",
     )
     parser.add_argument(
         "--no-synthesis",
@@ -130,6 +141,10 @@ def resolve_input_path(path: str) -> str:
     if not os.path.exists(resolved):
         raise FileNotFoundError(f"Input file not found: {resolved}")
     return resolved
+
+
+def is_json_input(path: str) -> bool:
+    return os.path.splitext(path)[1].lower() == ".json"
 
 
 def default_output_name(input_path: str, prefix: str) -> str:
@@ -212,6 +227,53 @@ def run_pipeline(
     return output_path
 
 
+def run_text_pipeline(
+    input_txt: str,
+    model: str,
+    output_path: str | None,
+    num_ctx: int,
+    whole_report: bool = False,
+    synthesize_final: bool = True,
+    think: bool = True,
+    gen_options: dict = None,
+    user_instruction: str = "",
+    as_is: bool = False,
+) -> str:
+    input_path = resolve_input_path(input_txt)
+    print(f"[pipeline] Loading raw text: {input_path}")
+    text = read_text(input_path)
+
+    mode = "whole report" if whole_report else "section-by-section"
+    print(f"[pipeline] Calling Ollama model '{model}' ({mode}, text mode"
+          f"{', as-is' if as_is else ''})...")
+    response = interpret_text_report(
+        text,
+        model=model,
+        num_ctx=num_ctx,
+        whole_report=whole_report,
+        synthesize_final=synthesize_final,
+        think=think,
+        gen_options=gen_options,
+        user_instruction=user_instruction,
+        as_is=as_is,
+    )
+
+    if output_path is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        stem = os.path.splitext(os.path.basename(input_path))[0]
+        output_path = f"{stem}_interpretation_{timestamp}.md"
+
+    footer_mode = "text whole-report" if whole_report else "text section-by-section"
+    if as_is:
+        footer_mode += " (as-is)"
+    footer = build_run_footer(
+        model=model, num_ctx=num_ctx, think=think, gen_options=gen_options,
+        mode=footer_mode, user_instruction=user_instruction, input_path=input_path,
+    )
+    save_text(response + footer, output_path)
+    return output_path
+
+
 def main() -> None:
     if "--check" in sys.argv:
         from check_env import main as check_main
@@ -223,23 +285,43 @@ def main() -> None:
         temperature=args.temperature, top_p=args.top_p, top_k=args.top_k,
         seed=args.seed, num_predict=args.num_predict,
     )
-    final_path = run_pipeline(
-        input_json=args.input,
-        descriptor_path=args.descriptor,
-        model=args.model,
-        extracted_filename=args.extracted_output,
-        annotated_filename=args.annotated_output,
-        output_path=args.output,
-        num_ctx=args.num_ctx,
-        whole_report=args.whole_report,
-        synthesize_final=not args.no_synthesis,
-        think=args.think,
-        gen_options=gen_options,
-        user_instruction=args.prompt,
-        review=args.review,
-        review_passes=args.review_passes,
-        save_intermediates=args.save_intermediates,
-    )
+
+    if is_json_input(args.input):
+        final_path = run_pipeline(
+            input_json=args.input,
+            descriptor_path=args.descriptor,
+            model=args.model,
+            extracted_filename=args.extracted_output,
+            annotated_filename=args.annotated_output,
+            output_path=args.output,
+            num_ctx=args.num_ctx,
+            whole_report=args.whole_report,
+            synthesize_final=not args.no_synthesis,
+            think=args.think,
+            gen_options=gen_options,
+            user_instruction=args.prompt,
+            review=args.review,
+            review_passes=args.review_passes,
+            save_intermediates=args.save_intermediates,
+        )
+    else:
+        if args.review:
+            print("[pipeline] --review is not supported for plain-text input; ignoring.")
+        if args.save_intermediates:
+            print("[pipeline] --save-intermediates has no effect for plain-text input "
+                  "(there is no JSON extraction step); ignoring.")
+        final_path = run_text_pipeline(
+            input_txt=args.input,
+            model=args.model,
+            output_path=args.output,
+            num_ctx=args.num_ctx,
+            whole_report=args.whole_report,
+            synthesize_final=not args.no_synthesis,
+            think=args.think,
+            gen_options=gen_options,
+            user_instruction=args.prompt,
+            as_is=args.as_is,
+        )
     print(f"[pipeline] Completed. Final report: {final_path}")
 
 

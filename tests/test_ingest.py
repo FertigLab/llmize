@@ -14,7 +14,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from ingest import extract_report_saved_raw_data, annotate
+from ingest import extract_report_saved_raw_data, annotate, split_text_sections
 
 
 class TestExtractReportSavedRawData(unittest.TestCase):
@@ -65,6 +65,35 @@ class TestAnnotate(unittest.TestCase):
         self.assertIn("some_section", annotated)
         self.assertNotIn("other_section", annotated)
         self.assertEqual(annotated["some_section"], {"data": {"sample_1": {"metric_a": 1.2}}})
+
+
+class TestSplitTextSections(unittest.TestCase):
+    def test_splits_on_markdown_headings(self):
+        text = "## Section One\nbody one\n## Section Two\nbody two\n"
+        sections = split_text_sections(text)
+        self.assertEqual(sections["Section One"], {"data": "body one"})
+        self.assertEqual(sections["Section Two"], {"data": "body two"})
+
+    def test_captures_preamble_before_first_heading(self):
+        text = "intro text\n## Section One\nbody one\n"
+        sections = split_text_sections(text)
+        self.assertEqual(sections["Preamble"], {"data": "intro text"})
+        self.assertEqual(sections["Section One"], {"data": "body one"})
+
+    def test_duplicate_headings_get_suffixed(self):
+        text = "## Section\nfirst\n## Section\nsecond\n"
+        sections = split_text_sections(text)
+        self.assertEqual(sections["Section"], {"data": "first"})
+        self.assertEqual(sections["Section (2)"], {"data": "second"})
+
+    def test_no_headings_falls_back_to_full_report(self):
+        text = "just plain text with no headings\n"
+        sections = split_text_sections(text)
+        self.assertEqual(sections, {"Full report": {"data": "just plain text with no headings"}})
+
+    def test_empty_input_returns_empty_dict(self):
+        self.assertEqual(split_text_sections(""), {})
+        self.assertEqual(split_text_sections("   \n  "), {})
 
 
 if __name__ == "__main__":

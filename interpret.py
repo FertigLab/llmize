@@ -11,6 +11,7 @@ from datetime import datetime
 import ollama
 
 from verify import deterministic_findings, extract_entities
+from ingest import split_text_sections
 
 SAMPLESHEET_KEY = "multiqc_samplesheet"
 
@@ -62,6 +63,18 @@ and contains a short descriptor of the section's structure and meaning.Your task
 analyse the data and give a concise summary.
 """ + STYLE_GUIDE + EVIDENCE_RULES
 
+TEXT_SYSTEM_PROMPT = """You are an expert bioinformatician. You are given a plain-text
+report produced by a bioinformatics tool or workflow (for example, a MultiQC
+"llms-full.txt" export). It has no fixed schema, so infer the meaning of each
+section from its heading and content. Your task is to analyse it and give a
+concise summary.
+""" + STYLE_GUIDE + EVIDENCE_RULES
+
+TEXT_AS_IS_SYSTEM_PROMPT = """You are an expert bioinformatician. You are given a
+plain-text report produced by a bioinformatics tool or workflow. The text already
+contains its own analysis instructions and formatting guidance — follow those
+instructions exactly as written instead of any separate style guide."""
+
 
 def build_prompt(report: dict) -> str:
     report_str = json.dumps(report, indent=2)
@@ -69,6 +82,26 @@ def build_prompt(report: dict) -> str:
         "Here is an annotated spatial transcriptomics report.\n"
         "Please analyze it and provide a structured biological interpretation.\n\n"
         f"```json\n{report_str}\n```"
+    )
+
+
+def build_prompt_text(text: str) -> str:
+    return (
+        "Here is a plain-text report.\n"
+        "Please analyze it and provide a structured interpretation.\n\n"
+        f"---\n{text.strip()}\n---"
+    )
+
+
+def build_text_section_prompt(section_name: str, body: str) -> str:
+    """Build the prompt analysing one heading-delimited chunk of a plain-text report."""
+    return (
+        f"Analyze the section `{section_name}` of the report in isolation.\n\n"
+        "Section text:\n"
+        f"---\n{body.strip()}\n---\n\n"
+        "Give a concise, analytical interpretation of THIS section only: the main "
+        "findings, notable or outlier values, and their likely meaning. Cite specific "
+        "numbers where present. Do not speculate about sections you were not shown."
     )
 
 
@@ -378,9 +411,9 @@ def _strip_leading_heading(text: str) -> str:
     return stripped
 
 
-def combine_responses(responses: list, summary: str = None) -> str:
+def combine_responses(responses: list, summary: str = None, title: str = None) -> str:
     """Combine section responses into one document, summary up front if given."""
-    parts = ["# MultiQC Spatial Transcriptomics Interpretation\n"]
+    parts = [f"# {title or 'MultiQC Spatial Transcriptomics Interpretation'}\n"]
     if summary:
         parts.append(f"\n## Overview\n\n{_strip_leading_heading(summary)}\n")
         parts.append("\n---\n\n## Per-section detail\n")
@@ -458,24 +491,19 @@ def build_chunks(report: dict, whole_report: bool, groups: dict) -> list:
             for name, obj in iter_analysis_sections(report)]
 
 
-def interpret_report(
-    report: dict,
+def _run_chunks(
+    chunks: list,
     model: str,
-    num_ctx: int = 32768,
-    whole_report: bool = False,
-    synthesize_final: bool = True,
-    think: bool = True,
-    gen_options: dict = None,
-    user_instruction: str = "",
+    system: str,
+    num_ctx: int,
+    synthesize_final: bool,
+    think: bool,
+    gen_options: dict,
+    samplesheet_context: str = "",
+    title: str = None,
 ) -> str:
-    """Interpret the report as one or more chunks; a single chunk is the whole report."""
-    samplesheet_context = build_samplesheet_context(report)
-    system = (SYSTEM_PROMPT + samplesheet_context
-              + build_user_instruction(user_instruction))
-    groups = sample_groups(report)
-
+    """Run each (name, prompt) chunk through the model, then optionally synthesize."""
     model = ensure_model(model)
-    chunks = build_chunks(report, whole_report, groups)
     total = len(chunks)
     print(f"[interpret] Analyzing {total} chunk(s) with model '{model}'"
           f"{' (thinking)' if think else ''}.", flush=True)
@@ -504,7 +532,63 @@ def interpret_report(
         print(f"[interpret] Synthesis done in {time.monotonic() - started:.1f}s", flush=True)
         print_thinking("Overview (synthesis)", summary_thinking)
 
-    return combine_responses(responses, summary)
+    return combine_responses(responses, summary, title=title)
+
+
+def interpret_report(
+    report: dict,
+    model: str,
+    num_ctx: int = 32768,
+    whole_report: bool = False,
+    synthesize_final: bool = True,
+    think: bool = True,
+    gen_options: dict = None,
+    user_instruction: str = "",
+) -> str:
+    """Interpret the report as one or more chunks; a single chunk is the whole report."""
+    samplesheet_context = build_samplesheet_context(report)
+    system = (SYSTEM_PROMPT + samplesheet_context
+              + build_user_instruction(user_instruction))
+    groups = sample_groups(report)
+    chunks = build_chunks(report, whole_report, groups)
+    return _run_chunks(
+        chunks, model, system, num_ctx, synthesize_final, think, gen_options,
+        samplesheet_context=samplesheet_context,
+    )
+
+
+def interpret_text_report(
+    text: str,
+    model: str,
+    num_ctx: int = 32768,
+    whole_report: bool = False,
+    synthesize_final: bool = True,
+    think: bool = True,
+    gen_options: dict = None,
+    user_instruction: str = "",
+    as_is: bool = False,
+) -> str:
+    """Interpret a plain-text report (e.g. MultiQC llms-full.txt), bypassing the JSON pipeline.
+
+    `as_is` drops the style guide/evidence rules, assuming the text already carries its
+    own analysis instructions; it does not affect whole-report vs. heading-split chunking.
+    """
+    base_prompt = TEXT_AS_IS_SYSTEM_PROMPT if as_is else TEXT_SYSTEM_PROMPT
+    system = base_prompt + build_user_instruction(user_instruction)
+    if whole_report:
+        chunks = [("Whole report", build_prompt_text(text))]
+    else:
+        sections = split_text_sections(text)
+        chunks = [
+            (name, build_text_section_prompt(name, obj["data"]))
+            for name, obj in sections.items()
+        ]
+        if not chunks:
+            chunks = [("Whole report", build_prompt_text(text))]
+    return _run_chunks(
+        chunks, model, system, num_ctx, synthesize_final, think, gen_options,
+        title="Report Interpretation",
+    )
 
 
 def _available_models() -> list:
