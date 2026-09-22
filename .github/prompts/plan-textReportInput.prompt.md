@@ -91,16 +91,100 @@
    heading splitting, preamble capture, duplicate-heading suffixing, no-heading
    fallback, and empty input.
 
+## Addendum: special-case chunker for MultiQC's `llms-full.txt` layout
+
+Real `llms-full.txt` exports don't use markdown headings at all, so the generic
+`split_text_sections` falls back to one giant "Full report" chunk. The actual layout is:
+
+```
+<free-form instructions for MultiQC's own LLM-summary tool>
+----------------------
+Tools used in the report:
+
+1. Sample Sheet
+Description: <p>...</p>
+----------------------
+2. Atlas Summary
+Description: <p>...</p>
+----------------------
+... (one numbered index entry per tool)
+----------------------
+----------------------
+Tool: Sample Sheet
+Section: 
+Title: Sample Sheet
+
+Plot type: violin plot
+...
+|table|...|
+----------------------
+Tool: Atlas Summary
+Section: 
+Title: Atlas Summary
+...
+----------------------
+... (one block per tool, this is the actual data)
+```
+
+### Decisions
+- Detection: sniff for this layout using structural markers rather than filename —
+  looks_like_multiqc_llms_full(text) returns True when the text contains the
+  `Tool:` / `Section:` / `Title:` line triad together with `----------------------`
+  separator lines (e.g. at least one regex match of
+  `^Tool: .+\nSection: .*\nTitle: .+$` in MULTILINE mode). This is checked before
+  falling back to the generic markdown-heading splitter.
+- Chunk granularity: one chunk per `Tool: X` block. `Section:` is blank in every
+  observed sample, so `Tool` name alone is used as the chunk name; if a future file has
+  a non-blank `Section:`, append it (`"X — Section"`) and still run duplicate-name
+  suffixing (reusing the same dedup helper as `split_text_sections`).
+- Numbered tool-description index (`N. Tool Name` / `Description: <p>...</p>` blocks
+  before the data): parsed into a `{tool_name: description}` map and attached as extra
+  context to the matching `Tool: X` chunk (HTML-stripped plain text), mirroring how
+  `descriptor_schema.json` enriches JSON sections. Exact-string match on tool name;
+  fail-soft (no match -> chunk gets no extra description, same as an unmatched section
+  in the JSON pipeline today). The index itself is not turned into its own chunk.
+- Leading free-form instructions block (before the tools index): dropped by default.
+  When `--as-is` is set AND this special-case layout is detected, this block is used
+  verbatim as the system prompt instead of `TEXT_AS_IS_SYSTEM_PROMPT` (it already tells
+  the model exactly how MultiQC wants its output formatted — bullet count, markdown
+  directives, etc.). Otherwise (no `--as-is`), it is discarded and `TEXT_SYSTEM_PROMPT`
+  (or `TEXT_AS_IS_SYSTEM_PROMPT`, if `--as-is` but a different plain-text file that
+  doesn't match this layout) is used as normal.
+- `--whole-report` interaction: no special-casing. `--whole-report` still sends the
+  full raw text as a single call regardless of this detection; detection only changes
+  the per-section chunking path.
+
+### New pieces
+- `ingest/text_ingest.py`:
+  - `looks_like_multiqc_llms_full(text) -> bool` — structural sniff described above.
+  - `split_multiqc_llms_full(text) -> tuple[dict, str]` — returns
+    `({chunk_name: {"data": body}}, leading_instructions_text)`. Parses the tool
+    description index first (building the `{tool_name: description}` map), then splits
+    the rest on `----------------------` separators, keeping only blocks that start with
+    `Tool: `, prepending the matched description (if any) to that block's body.
+- `interpret.py` / `interpret_text_report`: when building chunks (non-whole-report
+  path), try `looks_like_multiqc_llms_full` first; if it matches, use
+  `split_multiqc_llms_full` instead of `split_text_sections`, and — only when
+  `as_is=True` — use the returned leading instructions text as the system prompt in
+  place of `TEXT_AS_IS_SYSTEM_PROMPT`.
+- `tests/test_ingest.py`: new tests for `split_multiqc_llms_full` using a small
+  synthetic snippet in this exact layout (index + 2-3 `Tool:` blocks, one with a
+  matching description, one without), plus a `looks_like_multiqc_llms_full` positive/
+  negative case.
+
 ## Relevant files
 - `ingest/io_utils.py` — add `read_text`.
-- `ingest/text_ingest.py` (new) — `split_text_sections`.
+- `ingest/text_ingest.py` (new) — `split_text_sections`, `looks_like_multiqc_llms_full`,
+  `split_multiqc_llms_full`.
 - `ingest/__init__.py` — export additions.
 - `interpret.py` — `TEXT_SYSTEM_PROMPT`, `TEXT_AS_IS_SYSTEM_PROMPT`, `build_prompt_text`,
-  `build_text_section_prompt`, `_run_chunks` refactor, `interpret_text_report(..., as_is)`,
+  `build_text_section_prompt`, `_run_chunks` refactor, `interpret_text_report(..., as_is)`
+  (now also dispatching to the MultiQC-specific splitter when detected),
   `combine_responses(title=...)`.
 - `llmize.py` — `is_json_input`, `--as-is` flag, `run_text_pipeline`, dispatch in
   `main()`, warnings for `--review`/`--save-intermediates` in text mode.
-- `tests/test_ingest.py` — new tests for `split_text_sections`.
+- `tests/test_ingest.py` — tests for `split_text_sections` and the new
+  `split_multiqc_llms_full`/`looks_like_multiqc_llms_full`.
 
 ## Verification
 1. `python3 -m compileall llmize.py interpret.py check_env.py ingest`
@@ -110,3 +194,9 @@
    synthesis output; repeat with `--whole-report`.
 4. Manual: confirm `.json` inputs still go through the unchanged JSON pipeline
    (no regression).
+5. Manual: run against `data/llms-full.txt` (default section-by-section mode) and
+   confirm chunks are now one-per-`Tool:` block instead of a single "Full report"
+   blob; check descriptions are attached where the index has a matching entry.
+6. Manual: run `data/llms-full.txt` with `--as-is` and confirm the leading
+   instructions block is used as the system prompt.
+

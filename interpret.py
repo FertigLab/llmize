@@ -11,7 +11,7 @@ from datetime import datetime
 import ollama
 
 from verify import deterministic_findings, extract_entities
-from ingest import split_text_sections
+from ingest import split_text_sections, looks_like_multiqc_llms_full, split_multiqc_llms_full
 
 SAMPLESHEET_KEY = "multiqc_samplesheet"
 
@@ -609,17 +609,24 @@ def interpret_text_report(
     synthesis_prompt = (
         TEXT_AS_IS_SYNTHESIS_SYSTEM_PROMPT if as_is else TEXT_SYNTHESIS_SYSTEM_PROMPT
     )
-    system = base_prompt + build_user_instruction(user_instruction)
     if whole_report:
         chunks = [("Whole report", build_prompt_text(text))]
     else:
-        sections = split_text_sections(text)
+        # MultiQC's real llms-full.txt has no markdown headings; special-case its
+        # `Tool:`/`Section:`/`Title:` block layout instead of falling back to one blob.
+        if looks_like_multiqc_llms_full(text):
+            sections, leading_instructions = split_multiqc_llms_full(text)
+            if as_is and leading_instructions:
+                base_prompt = leading_instructions
+        else:
+            sections = split_text_sections(text)
         chunks = [
             (name, build_text_section_prompt(name, obj["data"]))
             for name, obj in sections.items()
         ]
         if not chunks:
             chunks = [("Whole report", build_prompt_text(text))]
+    system = base_prompt + build_user_instruction(user_instruction)
     return _run_chunks(
         chunks, model, system, num_ctx, synthesize_final, think, gen_options,
         title="Report Interpretation",

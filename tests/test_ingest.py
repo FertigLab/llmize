@@ -14,7 +14,13 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from ingest import extract_report_saved_raw_data, annotate, split_text_sections
+from ingest import (
+    extract_report_saved_raw_data,
+    annotate,
+    split_text_sections,
+    looks_like_multiqc_llms_full,
+    split_multiqc_llms_full,
+)
 
 
 class TestExtractReportSavedRawData(unittest.TestCase):
@@ -100,6 +106,64 @@ class TestSplitTextSections(unittest.TestCase):
     def test_empty_input_returns_empty_dict(self):
         self.assertEqual(split_text_sections(""), {})
         self.assertEqual(split_text_sections("   \n  "), {})
+
+
+class TestMultiqcLlmsFull(unittest.TestCase):
+    SAMPLE = (
+        "You are an expert bioinformatician. Summarize the findings.\n"
+        "----------------------\n\n"
+        "Tools used in the report:\n\n"
+        "1. Sample Sheet\n"
+        "Description: <p>The sample sheet provided as input.</p>\n\n"
+        "----------------------\n\n"
+        "2. Atlas Summary\n"
+        "Description: <p>Summary of cells and genes.</p>\n\n"
+        "----------------------\n\n"
+        "----------------------\n\n"
+        "Tool: Sample Sheet\n"
+        "Section: \n"
+        "Title: Sample Sheet\n\n"
+        "Plot type: violin plot\n\n"
+        "|sample|type|\n|---|---|\n|S1|visium|\n\n"
+        "----------------------\n\n"
+        "Tool: Unmatched Tool\n"
+        "Section: \n"
+        "Title: Unmatched Tool\n\n"
+        "Plot type: violin plot\n\n"
+        "|sample|value|\n|---|---|\n|S1|1|\n"
+    )
+
+    def test_looks_like_multiqc_llms_full_detects_layout(self):
+        self.assertTrue(looks_like_multiqc_llms_full(self.SAMPLE))
+        self.assertFalse(looks_like_multiqc_llms_full("## Section One\nbody\n"))
+
+    def test_splits_one_chunk_per_tool_block(self):
+        sections, leading = split_multiqc_llms_full(self.SAMPLE)
+        self.assertIn("Sample Sheet", sections)
+        self.assertIn("Unmatched Tool", sections)
+        self.assertEqual(
+            leading, "You are an expert bioinformatician. Summarize the findings."
+        )
+
+    def test_attaches_matching_index_description(self):
+        sections, _ = split_multiqc_llms_full(self.SAMPLE)
+        self.assertIn(
+            "Description: The sample sheet provided as input.",
+            sections["Sample Sheet"]["data"],
+        )
+
+    def test_unmatched_tool_has_no_description_prefix(self):
+        sections, _ = split_multiqc_llms_full(self.SAMPLE)
+        self.assertFalse(sections["Unmatched Tool"]["data"].startswith("Description:"))
+        self.assertTrue(sections["Unmatched Tool"]["data"].startswith("Tool: Unmatched Tool"))
+
+    def test_non_blank_section_appended_to_chunk_name(self):
+        text = (
+            "instructions\n----------------------\n\n"
+            "Tool: Foo\nSection: Bar\nTitle: Foo Bar\n\ndata here\n"
+        )
+        sections, _ = split_multiqc_llms_full(text)
+        self.assertIn("Foo \u2014 Bar", sections)
 
 
 if __name__ == "__main__":
