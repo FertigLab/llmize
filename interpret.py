@@ -11,6 +11,12 @@ from datetime import datetime
 import ollama
 
 from verify import deterministic_findings, extract_entities
+from ingest import (
+    split_text_sections,
+    looks_like_multiqc_llms_full,
+    split_multiqc_llms_full,
+    extract_samplesheet_chunk,
+)
 
 SAMPLESHEET_KEY = "multiqc_samplesheet"
 
@@ -62,13 +68,45 @@ and contains a short descriptor of the section's structure and meaning.Your task
 analyse the data and give a concise summary.
 """ + STYLE_GUIDE + EVIDENCE_RULES
 
+TEXT_SYSTEM_PROMPT = """You are an expert bioinformatician. You are given a plain-text
+report produced by a bioinformatics tool or workflow (for example, a MultiQC
+"llms-full.txt" export). It has no fixed schema, so infer the meaning of each
+section from its heading and content. Your task is to analyse it and give a
+concise summary.
+""" + STYLE_GUIDE + EVIDENCE_RULES
+
+TEXT_AS_IS_SYSTEM_PROMPT = """You are an expert bioinformatician. You are given a
+plain-text report produced by a bioinformatics tool or workflow. The text already
+contains its own analysis instructions and formatting guidance — follow those
+instructions exactly as written instead of any separate style guide."""
+
 
 def build_prompt(report: dict) -> str:
     report_str = json.dumps(report, indent=2)
     return (
-        "Here is an annotated spatial transcriptomics report.\n"
+        "Here is an annotated bioinformatics report.\n"
         "Please analyze it and provide a structured biological interpretation.\n\n"
         f"```json\n{report_str}\n```"
+    )
+
+
+def build_prompt_text(text: str) -> str:
+    return (
+        "Here is a plain-text report.\n"
+        "Please analyze it and provide a structured interpretation.\n\n"
+        f"---\n{text.strip()}\n---"
+    )
+
+
+def build_text_section_prompt(section_name: str, body: str) -> str:
+    """Build the prompt analysing one heading-delimited chunk of a plain-text report."""
+    return (
+        f"Analyze the section `{section_name}` of the report in isolation.\n\n"
+        "Section text:\n"
+        f"---\n{body.strip()}\n---\n\n"
+        "Give a concise, analytical interpretation of THIS section only: the main "
+        "findings, notable or outlier values, and their likely meaning. Cite specific "
+        "numbers where present. Do not speculate about sections you were not shown."
     )
 
 
@@ -79,12 +117,8 @@ def _split_descriptor(section_obj: dict) -> tuple:
     return descriptor, data
 
 
-def build_samplesheet_context(report: dict) -> str:
-    """Sample sheet block for the shared system prompt, naming the grouping columns."""
-    samplesheet = report.get(SAMPLESHEET_KEY)
-    if not isinstance(samplesheet, dict):
-        return ""
-    groups = sample_groups(report)
+def _samplesheet_context_block(samplesheet_data: dict, groups: dict) -> str:
+    """Build the shared SAMPLE SHEET context block from a plain {sample_id: {col: val}} dict."""
     if groups:
         cols = "; ".join(
             f"{col} ({', '.join(sorted(set(mapping.values())))})"
@@ -102,9 +136,18 @@ def build_samplesheet_context(report: dict) -> str:
         )
     return (
         "\n\n--- SAMPLE SHEET (shared context for every section below) ---\n"
-        f"```json\n{json.dumps(samplesheet, indent=2)}\n```\n"
+        f"```json\n{json.dumps(samplesheet_data, indent=2)}\n```\n"
         + grouping_note
     )
+
+
+def build_samplesheet_context(report: dict) -> str:
+    """Sample sheet block for the shared system prompt, naming the grouping columns."""
+    samplesheet = report.get(SAMPLESHEET_KEY)
+    if not isinstance(samplesheet, dict):
+        return ""
+    groups = sample_groups(report)
+    return _samplesheet_context_block(samplesheet, groups)
 
 
 def _percentages(counts: dict) -> dict:
@@ -163,16 +206,25 @@ def _is_number(s) -> bool:
 
 
 def sample_groups(report: dict, max_group_values: int = 10) -> dict:
-    """Auto-detect categorical grouping columns from the sample sheet.
+    """Auto-detect categorical grouping columns from the report's sample sheet.
+
+    Thin wrapper around `_sample_groups_from_data` that unwraps the report's
+    `multiqc_samplesheet` section into a plain {sample_id: {col: value}} dict.
+    """
+    samplesheet = report.get(SAMPLESHEET_KEY, {})
+    data = samplesheet.get("data", {}) if isinstance(samplesheet, dict) else {}
+    return _sample_groups_from_data(data, max_group_values=max_group_values)
+
+
+def _sample_groups_from_data(samplesheet_data: dict, max_group_values: int = 10) -> dict:
+    """Auto-detect categorical grouping columns from a plain {sample_id: {col: value}} dict.
 
     Returns {column: {sample_id: value}} for each sample-sheet column usable to group
     samples — 2+ distinct categorical values, not all-identical, not near-unique, not
     continuous. Duplicate partitions (e.g. timepoint vs timepoint_date) are collapsed.
     Metadata-agnostic: works for response, timepoint, region, sample_type, etc.
     """
-    samplesheet = report.get(SAMPLESHEET_KEY, {})
-    data = samplesheet.get("data", {}) if isinstance(samplesheet, dict) else {}
-    samples = {sid: meta for sid, meta in data.items() if isinstance(meta, dict)}
+    samples = {sid: meta for sid, meta in samplesheet_data.items() if isinstance(meta, dict)}
     n = len(samples)
     if n < 2:
         return {}
@@ -319,7 +371,7 @@ def iter_analysis_sections(report: dict):
 
 
 SYNTHESIS_SYSTEM_PROMPT = """You are an expert bioinformatician. You are given
-the per-section analyses of a spatial transcriptomics report.
+the per-section analyses of a bioinformatics report.
 
 Synthesize them into one concise executive summary of a few short paragraphs.
 Cover:
@@ -343,6 +395,30 @@ one by one. Output only the summary prose — do NOT add your own title or markd
 heading.
 """ + STYLE_GUIDE + EVIDENCE_RULES
 
+TEXT_SYNTHESIS_SYSTEM_PROMPT = """You are an expert bioinformatician. You are given
+the per-section analyses of a plain-text report produced by a bioinformatics
+tool or workflow.
+
+Synthesize them into one concise executive summary of a few short paragraphs.
+Cover:
+- the overall picture and whether the report appears internally consistent,
+- any notable patterns, outliers, or data-quality issues surfaced across sections,
+- the most important quantitative findings, citing key numbers and percentages,
+- findings across sections that are consistent with each other, or contradict each other,
+- any well-supported group differences only when the report itself provides the needed
+  grouping context; otherwise focus on overall patterns and limitations.
+
+Do not repeat each section verbatim or list sections one by one. Output only the
+summary prose — do NOT add your own title or markdown heading.
+""" + STYLE_GUIDE + EVIDENCE_RULES
+
+TEXT_AS_IS_SYNTHESIS_SYSTEM_PROMPT = """You are an expert bioinformatician. You are
+given the per-section analyses of a plain-text report produced by a bioinformatics
+tool or workflow. The report's text already carries its own analysis instructions
+and formatting guidance, so preserve that guidance while writing one concise
+executive summary across the sections. Output only the summary prose — do NOT add
+your own title or markdown heading."""
+
 
 def synthesize_sections(
     responses: list,
@@ -351,6 +427,7 @@ def synthesize_sections(
     samplesheet_context: str = "",
     think: bool = True,
     gen_options: dict = None,
+    system_prompt: str = SYNTHESIS_SYSTEM_PROMPT,
 ) -> tuple:
     """Final call condensing the section analyses into a summary; returns (content, thinking)."""
     combined = "\n\n".join(f"### {name}\n{text.strip()}" for name, text in responses)
@@ -362,7 +439,7 @@ def synthesize_sections(
     return chat_ollama(
         prompt,
         model=model,
-        system=SYNTHESIS_SYSTEM_PROMPT + samplesheet_context,
+        system=system_prompt + samplesheet_context,
         num_ctx=num_ctx,
         think=think,
         gen_options=gen_options,
@@ -378,9 +455,9 @@ def _strip_leading_heading(text: str) -> str:
     return stripped
 
 
-def combine_responses(responses: list, summary: str = None) -> str:
+def combine_responses(responses: list, summary: str = None, title: str = None) -> str:
     """Combine section responses into one document, summary up front if given."""
-    parts = ["# MultiQC Spatial Transcriptomics Interpretation\n"]
+    parts = [f"# {title or 'Report Interpretation'}\n"]
     if summary:
         parts.append(f"\n## Overview\n\n{_strip_leading_heading(summary)}\n")
         parts.append("\n---\n\n## Per-section detail\n")
@@ -389,12 +466,12 @@ def combine_responses(responses: list, summary: str = None) -> str:
     return "\n".join(parts)
 
 
-REVIEW_SYSTEM_PROMPT = """You are an expert bioinformatician reviewing a spatial transcriptomics interpretation for factual grounding and internal consistency. Correct statements that are not supported by the underlying report data, remove claims about genes, proteins, or cell types that do not appear in the data, and resolve contradictions between sections. Preserve the document's headings, tables, and structure. Do not add new findings and do not soften the removal of unsupported claims. Output only the corrected document, with no preamble.""" + STYLE_GUIDE + EVIDENCE_RULES
+REVIEW_SYSTEM_PROMPT = """You are an expert bioinformatician reviewing a bioinformatics report interpretation for factual grounding and internal consistency. Correct statements that are not supported by the underlying report data, remove claims about genes, proteins, or cell types that do not appear in the data, and resolve contradictions between sections. Preserve the document's headings, tables, and structure. Do not add new findings and do not soften the removal of unsupported claims. Output only the corrected document, with no preamble.""" + STYLE_GUIDE + EVIDENCE_RULES
 
 
 def build_review_prompt(text: str, findings: list) -> str:
     parts = [
-        "Review the spatial transcriptomics interpretation below. Correct any statement "
+        "Review the bioinformatics report interpretation below. Correct any statement "
         "that is not supported by the report data, and resolve any internal contradiction "
         "between sections. Do not introduce new claims, and do not invent gene or protein "
         "functions."
@@ -458,24 +535,20 @@ def build_chunks(report: dict, whole_report: bool, groups: dict) -> list:
             for name, obj in iter_analysis_sections(report)]
 
 
-def interpret_report(
-    report: dict,
+def _run_chunks(
+    chunks: list,
     model: str,
-    num_ctx: int = 32768,
-    whole_report: bool = False,
-    synthesize_final: bool = True,
-    think: bool = True,
-    gen_options: dict = None,
-    user_instruction: str = "",
+    system: str,
+    num_ctx: int,
+    synthesize_final: bool,
+    think: bool,
+    gen_options: dict,
+    samplesheet_context: str = "",
+    title: str = None,
+    synthesis_system_prompt: str = SYNTHESIS_SYSTEM_PROMPT,
 ) -> str:
-    """Interpret the report as one or more chunks; a single chunk is the whole report."""
-    samplesheet_context = build_samplesheet_context(report)
-    system = (SYSTEM_PROMPT + samplesheet_context
-              + build_user_instruction(user_instruction))
-    groups = sample_groups(report)
-
+    """Run each (name, prompt) chunk through the model, then optionally synthesize."""
     model = ensure_model(model)
-    chunks = build_chunks(report, whole_report, groups)
     total = len(chunks)
     print(f"[interpret] Analyzing {total} chunk(s) with model '{model}'"
           f"{' (thinking)' if think else ''}.", flush=True)
@@ -499,12 +572,96 @@ def interpret_report(
         print("[interpret] Synthesizing executive summary from per-section analyses...", flush=True)
         started = time.monotonic()
         summary, summary_thinking = synthesize_sections(
-            responses, model, num_ctx, samplesheet_context, think=think, gen_options=gen_options
+            responses,
+            model,
+            num_ctx,
+            samplesheet_context,
+            think=think,
+            gen_options=gen_options,
+            system_prompt=synthesis_system_prompt,
         )
         print(f"[interpret] Synthesis done in {time.monotonic() - started:.1f}s", flush=True)
         print_thinking("Overview (synthesis)", summary_thinking)
 
-    return combine_responses(responses, summary)
+    return combine_responses(responses, summary, title=title)
+
+
+def interpret_report(
+    report: dict,
+    model: str,
+    num_ctx: int = 32768,
+    whole_report: bool = False,
+    synthesize_final: bool = True,
+    think: bool = True,
+    gen_options: dict = None,
+    user_instruction: str = "",
+) -> str:
+    """Interpret the report as one or more chunks; a single chunk is the whole report."""
+    samplesheet_context = build_samplesheet_context(report)
+    system = (SYSTEM_PROMPT + samplesheet_context
+              + build_user_instruction(user_instruction))
+    groups = sample_groups(report)
+    chunks = build_chunks(report, whole_report, groups)
+    return _run_chunks(
+        chunks, model, system, num_ctx, synthesize_final, think, gen_options,
+        samplesheet_context=samplesheet_context,
+    )
+
+
+def interpret_text_report(
+    text: str,
+    model: str,
+    num_ctx: int = 32768,
+    whole_report: bool = False,
+    synthesize_final: bool = True,
+    think: bool = True,
+    gen_options: dict = None,
+    user_instruction: str = "",
+    as_is: bool = False,
+) -> str:
+    """Interpret a plain-text report (e.g. MultiQC llms-full.txt), bypassing the JSON pipeline.
+
+    `as_is` drops the style guide/evidence rules, assuming the text already carries its
+    own analysis instructions; it does not affect whole-report vs. heading-split chunking.
+    """
+    base_prompt = TEXT_AS_IS_SYSTEM_PROMPT if as_is else TEXT_SYSTEM_PROMPT
+    synthesis_prompt = (
+        TEXT_AS_IS_SYNTHESIS_SYSTEM_PROMPT if as_is else TEXT_SYNTHESIS_SYSTEM_PROMPT
+    )
+    samplesheet_context = ""
+    if whole_report:
+        chunks = [("Whole report", build_prompt_text(text))]
+    else:
+        # MultiQC's real llms-full.txt has no markdown headings; special-case its
+        # `Tool:`/`Section:`/`Title:` block layout instead of falling back to one blob.
+        if looks_like_multiqc_llms_full(text):
+            sections, leading_instructions = split_multiqc_llms_full(text)
+            if as_is and leading_instructions:
+                base_prompt = leading_instructions
+        else:
+            sections = split_text_sections(text)
+
+        # Keep sample metadata next to the analysis: pull out a Sample Sheet-like
+        # chunk (if present and parseable) and reuse it as shared context instead of
+        # analyzing it in isolation, mirroring the JSON pipeline's samplesheet handling.
+        sections, samplesheet_data = extract_samplesheet_chunk(sections)
+        if samplesheet_data:
+            groups = _sample_groups_from_data(samplesheet_data)
+            samplesheet_context = _samplesheet_context_block(samplesheet_data, groups)
+
+        chunks = [
+            (name, build_text_section_prompt(name, obj["data"]))
+            for name, obj in sections.items()
+        ]
+        if not chunks:
+            chunks = [("Whole report", build_prompt_text(text))]
+    system = base_prompt + samplesheet_context + build_user_instruction(user_instruction)
+    return _run_chunks(
+        chunks, model, system, num_ctx, synthesize_final, think, gen_options,
+        title="Report Interpretation",
+        synthesis_system_prompt=synthesis_prompt,
+        samplesheet_context=samplesheet_context,
+    )
 
 
 def _available_models() -> list:

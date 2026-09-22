@@ -14,7 +14,15 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from ingest import extract_report_saved_raw_data, annotate
+from ingest import (
+    extract_report_saved_raw_data,
+    annotate,
+    split_text_sections,
+    looks_like_multiqc_llms_full,
+    split_multiqc_llms_full,
+    parse_markdown_table,
+    extract_samplesheet_chunk,
+)
 
 
 class TestExtractReportSavedRawData(unittest.TestCase):
@@ -65,6 +73,158 @@ class TestAnnotate(unittest.TestCase):
         self.assertIn("some_section", annotated)
         self.assertNotIn("other_section", annotated)
         self.assertEqual(annotated["some_section"], {"data": {"sample_1": {"metric_a": 1.2}}})
+
+
+class TestSplitTextSections(unittest.TestCase):
+    def test_splits_on_markdown_headings(self):
+        text = "## Section One\nbody one\n## Section Two\nbody two\n"
+        sections = split_text_sections(text)
+        self.assertEqual(sections["Section One"], {"data": "body one"})
+        self.assertEqual(sections["Section Two"], {"data": "body two"})
+
+    def test_captures_preamble_before_first_heading(self):
+        text = "intro text\n## Section One\nbody one\n"
+        sections = split_text_sections(text)
+        self.assertEqual(sections["Preamble"], {"data": "intro text"})
+        self.assertEqual(sections["Section One"], {"data": "body one"})
+
+    def test_duplicate_headings_get_suffixed(self):
+        text = "## Section\nfirst\n## Section\nsecond\n"
+        sections = split_text_sections(text)
+        self.assertEqual(sections["Section"], {"data": "first"})
+        self.assertEqual(sections["Section (2)"], {"data": "second"})
+
+    def test_preamble_heading_collision_gets_suffixed(self):
+        text = "intro text\n## Preamble\nbody text\n"
+        sections = split_text_sections(text)
+        self.assertEqual(sections["Preamble"], {"data": "intro text"})
+        self.assertEqual(sections["Preamble (2)"], {"data": "body text"})
+
+    def test_no_headings_falls_back_to_full_report(self):
+        text = "just plain text with no headings\n"
+        sections = split_text_sections(text)
+        self.assertEqual(sections, {"Full report": {"data": "just plain text with no headings"}})
+
+    def test_empty_input_returns_empty_dict(self):
+        self.assertEqual(split_text_sections(""), {})
+        self.assertEqual(split_text_sections("   \n  "), {})
+
+
+class TestMultiqcLlmsFull(unittest.TestCase):
+    SAMPLE = (
+        "You are an expert bioinformatician. Summarize the findings.\n"
+        "----------------------\n\n"
+        "Tools used in the report:\n\n"
+        "1. Sample Sheet\n"
+        "Description: <p>The sample sheet provided as input.</p>\n\n"
+        "----------------------\n\n"
+        "2. Atlas Summary\n"
+        "Description: <p>Summary of cells and genes.</p>\n\n"
+        "----------------------\n\n"
+        "----------------------\n\n"
+        "Tool: Sample Sheet\n"
+        "Section: \n"
+        "Title: Sample Sheet\n\n"
+        "Plot type: violin plot\n\n"
+        "|sample|type|\n|---|---|\n|S1|visium|\n\n"
+        "----------------------\n\n"
+        "Tool: Unmatched Tool\n"
+        "Section: \n"
+        "Title: Unmatched Tool\n\n"
+        "Plot type: violin plot\n\n"
+        "|sample|value|\n|---|---|\n|S1|1|\n"
+    )
+
+    def test_looks_like_multiqc_llms_full_detects_layout(self):
+        self.assertTrue(looks_like_multiqc_llms_full(self.SAMPLE))
+        self.assertFalse(looks_like_multiqc_llms_full("## Section One\nbody\n"))
+
+    def test_splits_one_chunk_per_tool_block(self):
+        sections, leading = split_multiqc_llms_full(self.SAMPLE)
+        self.assertIn("Sample Sheet", sections)
+        self.assertIn("Unmatched Tool", sections)
+        self.assertEqual(
+            leading, "You are an expert bioinformatician. Summarize the findings."
+        )
+
+    def test_attaches_matching_index_description(self):
+        sections, _ = split_multiqc_llms_full(self.SAMPLE)
+        self.assertIn(
+            "Description: The sample sheet provided as input.",
+            sections["Sample Sheet"]["data"],
+        )
+
+    def test_unmatched_tool_has_no_description_prefix(self):
+        sections, _ = split_multiqc_llms_full(self.SAMPLE)
+        self.assertFalse(sections["Unmatched Tool"]["data"].startswith("Description:"))
+        self.assertTrue(sections["Unmatched Tool"]["data"].startswith("Tool: Unmatched Tool"))
+
+    def test_non_blank_section_appended_to_chunk_name(self):
+        text = (
+            "instructions\n----------------------\n\n"
+            "Tool: Foo\nSection: Bar\nTitle: Foo Bar\n\ndata here\n"
+        )
+        sections, _ = split_multiqc_llms_full(text)
+        self.assertIn("Foo \u2014 Bar", sections)
+
+
+class TestParseMarkdownTable(unittest.TestCase):
+    def test_parses_clean_table(self):
+        text = "|sample|response|\n|---|---|\n|S1|responder|\n|S2|non-responder|\n"
+        table = parse_markdown_table(text)
+        self.assertEqual(table, {
+            "S1": {"response": "responder"},
+            "S2": {"response": "non-responder"},
+        })
+
+    def test_ignores_surrounding_prose(self):
+        text = (
+            "Tool: Sample Sheet\nTitle: Sample Sheet\n\n"
+            "|sample|type|\n|---|---|\n|S1|visium|\n\nsome trailing note\n"
+        )
+        table = parse_markdown_table(text)
+        self.assertEqual(table, {"S1": {"type": "visium"}})
+
+    def test_no_table_returns_empty_dict(self):
+        self.assertEqual(parse_markdown_table("just plain text, no pipes here\n"), {})
+
+    def test_single_column_table_returns_empty_dict(self):
+        text = "|sample|\n|---|\n|S1|\n|S2|\n"
+        self.assertEqual(parse_markdown_table(text), {})
+
+
+class TestExtractSamplesheetChunk(unittest.TestCase):
+    def test_pops_matching_samplesheet_chunk(self):
+        sections = {
+            "Sample Sheet": {"data": "|sample|response|\n|---|---|\n|S1|r|\n|S2|nr|\n"},
+            "Other Tool": {"data": "some data"},
+        }
+        remaining, parsed = extract_samplesheet_chunk(sections)
+        self.assertNotIn("Sample Sheet", remaining)
+        self.assertIn("Other Tool", remaining)
+        self.assertEqual(parsed, {"S1": {"response": "r"}, "S2": {"response": "nr"}})
+
+    def test_no_match_leaves_sections_unchanged(self):
+        sections = {"Other Tool": {"data": "some data"}}
+        remaining, parsed = extract_samplesheet_chunk(sections)
+        self.assertEqual(remaining, sections)
+        self.assertIsNone(parsed)
+
+    def test_match_with_unparseable_table_leaves_sections_unchanged(self):
+        sections = {"Sample Sheet": {"data": "no table here at all"}}
+        remaining, parsed = extract_samplesheet_chunk(sections)
+        self.assertEqual(remaining, sections)
+        self.assertIsNone(parsed)
+
+    def test_section_qualified_name_still_matches(self):
+        sections = {
+            "Sample Sheet \u2014 Overview": {
+                "data": "|sample|type|\n|---|---|\n|S1|a|\n|S2|b|\n"
+            },
+        }
+        remaining, parsed = extract_samplesheet_chunk(sections)
+        self.assertEqual(remaining, {})
+        self.assertEqual(parsed, {"S1": {"type": "a"}, "S2": {"type": "b"}})
 
 
 if __name__ == "__main__":

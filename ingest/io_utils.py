@@ -21,6 +21,11 @@ def load_json(filepath: str) -> dict:
         return json.load(f)
 
 
+def read_text(filepath: str) -> str:
+    with open(filepath, "r", encoding="utf-8") as f:
+        return f.read()
+
+
 def save_json(data: dict, data_dir: str, filename: str, indent: int = 2) -> str:
     output_path = os.path.join(data_dir, os.path.basename(filename))
     os.makedirs(data_dir, exist_ok=True)

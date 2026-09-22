@@ -1,18 +1,17 @@
 # llmize
 
-Reduce, annotate, and interpret MultiQC spatial-transcriptomics reports with a
-local LLM (via Ollama). The tool is built around MultiQC's report structure but
-also accepts any JSON with section-keyed data — MultiQC-specific handling (sample
-sheet, spatial-neighbors/co-occurrence merging) kicks in automatically when those
-sections are present, and other data passes through as-is.
+Interpret bioinformatics analysis/QC reports with a local LLM (via Ollama) — as JSON
+ (section-keyed) or plain text/markdown reports. MultiQC is supported: its `*_data.json`
+ exports and its `llms-full.txt` export both work out of the box. Any other section-keyed
+ JSON or free text is interpreted generically.
 
 Interpretation runs **entirely on your own machine** — the model and inference are
 local, and nothing is sent to any external service.
 
 There are two ways to run it:
-- **Nextflow (recommended)** — runs in a container with Ollama and Python deps
+- **Nextflow** — runs in a container with Ollama and Python deps
   already baked in; no local setup beyond Nextflow itself and a container engine.
-- **Directly with Python** — useful for local development/debugging; needs a
+- **Python** — useful for local development/debugging; needs a
   local Python environment and a locally running Ollama.
 
 ## Run with Nextflow
@@ -36,8 +35,8 @@ don't need Ollama or the Python dependencies installed on your host for this pat
 
 ```bash
 nextflow run main.nf \
-   -profile igs \
-   --input data/multiqc_data.json \
+   -profile <profile> \
+   --input data.json \
    --slurm_account <your-account> \
    -w /usr/local/scratch/$USER/work \
    -resume
@@ -53,7 +52,7 @@ The Nextflow module uses an Ollama model cache directory via `OLLAMA_MODELS`.
 
 ```bash
 nextflow run main.nf \
-   -profile igs \
+   -profile <profile> \
    --input data/multiqc_data.json \
    --slurm_account <your-account> \
    --ollama_models_dir /path/to/persistent/models \
@@ -65,7 +64,8 @@ nextflow run main.nf \
 
 `-profile native` runs `llmize.py` directly on the host instead of in a
 container, so it needs the same local setup as "Run directly with Python" below
-(Ollama installed and running, Python dependencies installed).
+(Ollama installed and running, Python dependencies installed). Useful on Macs where
+ Docker does not have access to GPU.
 
 ## Run directly with Python
 
@@ -93,8 +93,6 @@ Confirm everything is in place — Python version, the `ollama` client, the
 schema:
 
 ```bash
-python3 check_env.py
-# or, equivalently:
 python3 llmize.py --check
 ```
 
@@ -103,13 +101,13 @@ It prints a clear ✓/⚠/✗ report and exits non-zero if a required check fail
 ### 4. Run it
 
 ```bash
-python3 llmize.py --input data/multiqc_data.json --model gemma4
+python3 llmize.py --input multiqc_data.json --model gemma4
 ```
 
 Common flags (see `python3 llmize.py --help` for the full list):
 
 ```bash
-python3 llmize.py --input data/multiqc_data.json \
+python3 llmize.py --input data.json \
    --prompt "Summarize immune infiltration and flag any tumor-immune interactions." \
    --review --output my_interpretation.md
 ```
@@ -118,13 +116,54 @@ Note that `llmize.py`'s own flags use hyphens and differ slightly from the
 Nextflow parameter names below (e.g. `--whole-report`/`--no-synthesis` instead
 of `--whole_report`/`--synthesis false`).
 
-## Continuous integration
+## JSON input
 
-The GitHub Actions workflow (`.github/workflows/test.yml`) runs on every pull request
-to `main`, across Python 3.9 / 3.11 / 3.12. Because CI runners have no Ollama server,
-it installs dependencies, byte-compiles all modules, runs the unit test suite
-(`python -m unittest discover tests`), and runs `check_env.py` informationally
-(non-blocking, since there's no local Ollama service in CI).
+`llmize.py` accepts JSON reports with section-keyed data, such as MultiQC's `*_data.json` exports. The JSON is processed through the normal reduce/annotate/interpret pipeline, with MultiQC-specific enhancements applied automatically when relevant sections are detected.
+
+When using JSON input, each key may be described in a separate descriptor file, which provides metadata and instructions for how that section should be interpreted (see `ingest/descriptor_schema.json`).
+
+
+## Plain-text input
+
+`llmize.py` also accepts plain text inputs — for example MultiQC's
+`llms-full.txt` export, or any other free-text report. The mode is chosen purely
+by file extension: `.json` goes through the reduce/annotate/interpret
+pipeline; anything else (`.txt`, `.md`, no extension, ...) is treated as plain text and bypasses JSON extraction/annotation entirely (so
+`--descriptor`, `--extracted-output`, `--annotated-output`, `--save-intermediates`,
+and `--review` don't apply and are ignored, with a warning for the latter two).
+
+```bash
+python3 llmize.py --input llms-full.txt --model gemma4
+```
+
+By default (not `--whole-report`), the text is split into chunks and each is
+interpreted separately before a final synthesis pass, same as JSON's
+section-by-section mode:
+- If the text has markdown headings (`#` .. `######`), each heading becomes a chunk.
+- MultiQC's real `llms-full.txt` layout is auto-detected and split one chunk per `Tool:` 
+block, with the matching description from the report's tool index attached automatically.
+- If a chunk looks like a sample sheet (a table named "Sample Sheet"/"samplesheet"),
+  it's pulled out of the individual chunk list and kept as shared context instead —
+  its content, and any metadata column that usefully groups samples (e.g.
+  responder/non-responder), is carried into every other chunk's analysis and into
+  the final synthesis.
+
+## Just run my prompt
+
+`--whole-report` sends the entire text as a single call with no chunking.
+
+`--as-is` omits any system prompt and assumes analysis prompt is included, like default
+MultiQC's llms output does.
+
+When combined, sends the entire report to the model without any automatic chunking or system prompt, giving you full control over the input and instructions.
+
+```bash
+python3 llmize.py --input llms-full.txt --model gemma4 --as-is --whole-report
+```
+
+`--as-is` only affects the system prompt/style, not chunking — `--whole-report` still
+works the same way with or without it. This flag is currently `llmize.py`-only and
+not yet exposed as a Nextflow parameter.
 
 ## Parameters
 
@@ -133,10 +172,10 @@ are set explicitly, e.g. `--think false` or `--review true`.
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `--input` | — (required) | Path to the MultiQC `*_data.json` report, or any JSON with section-keyed data. |
-| `--descriptor` | bundled schema | Descriptor schema JSON; override to use your own (see below). |
+| `--input` | — (required) | Path to a report file: JSON (MultiQC's `*_data.json`, or any section-keyed JSON) or plain text (e.g. MultiQC's `llms-full.txt`); mode is auto-detected by file extension. See [Plain-text input](#plain-text-input). |
+| `--descriptor` | bundled schema | Descriptor schema JSON (JSON mode only), keyed by top-level section name; overlaid onto matching sections to tell the model what each field means. Copy `ingest/descriptor_schema.json` and edit it to describe your own report's sections, then pass the copy here. Sections with no matching entry pass through unannotated. |
 | `--model` | `gemma4` | Ollama model name. |
-| `--outdir` | `results` | Directory for the output interpretation. |
+| `--output` | (none) | Path to the output file; if not specified, defaults to `<input_stem>_interpretation_<timestamp>.md` in the current directory. |
 | `--prompt` | (none) | Extra instruction appended to the model prompt. |
 | `--num_ctx` | `32768` | Context window size. |
 | `--temperature` | model default | Sampling temperature (`0` = deterministic). |
@@ -150,17 +189,3 @@ are set explicitly, e.g. `--think false` or `--review true`.
 | `--review` | `false` | Self-review pass flagging gene/cell-type names absent from the report. |
 | `--review_passes` | `2` | Maximum review passes (used with `--review true`). |
 
-Execution/infrastructure parameters (`--container`, `--ollama_models_dir`, profiles)
-are covered under **Run with Nextflow** above. These are the Nextflow parameter
-names (see `nextflow.config`); when running `llmize.py` directly, use `--help` to
-see its own flag names.
-
-## Where to place your files
-
-- **QC report** — your MultiQC `*_data.json` (or any section-keyed JSON). Put it anywhere and point `--input` at
-  it; the examples keep reports in `data/`.
-- **Descriptor schema** — the default ships at `ingest/descriptor_schema.json`
-  and is used automatically. To describe your own report sections, copy that file, edit
-  the entries, and pass it with `--descriptor /path/to/your_schema.json`.
-- **Output** — the interpretation `.md` is written to `results/` (or wherever
-  `--outdir` points).
