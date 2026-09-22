@@ -84,7 +84,7 @@ instructions exactly as written instead of any separate style guide."""
 def build_prompt(report: dict) -> str:
     report_str = json.dumps(report, indent=2)
     return (
-        "Here is an annotated spatial transcriptomics report.\n"
+        "Here is an annotated bioinformatics report.\n"
         "Please analyze it and provide a structured biological interpretation.\n\n"
         f"```json\n{report_str}\n```"
     )
@@ -371,7 +371,7 @@ def iter_analysis_sections(report: dict):
 
 
 SYNTHESIS_SYSTEM_PROMPT = """You are an expert bioinformatician. You are given
-the per-section analyses of a spatial transcriptomics report.
+the per-section analyses of a bioinformatics report.
 
 Synthesize them into one concise executive summary of a few short paragraphs.
 Cover:
@@ -457,7 +457,7 @@ def _strip_leading_heading(text: str) -> str:
 
 def combine_responses(responses: list, summary: str = None, title: str = None) -> str:
     """Combine section responses into one document, summary up front if given."""
-    parts = [f"# {title or 'MultiQC Spatial Transcriptomics Interpretation'}\n"]
+    parts = [f"# {title or 'Report Interpretation'}\n"]
     if summary:
         parts.append(f"\n## Overview\n\n{_strip_leading_heading(summary)}\n")
         parts.append("\n---\n\n## Per-section detail\n")
@@ -466,12 +466,12 @@ def combine_responses(responses: list, summary: str = None, title: str = None) -
     return "\n".join(parts)
 
 
-REVIEW_SYSTEM_PROMPT = """You are an expert bioinformatician reviewing a spatial transcriptomics interpretation for factual grounding and internal consistency. Correct statements that are not supported by the underlying report data, remove claims about genes, proteins, or cell types that do not appear in the data, and resolve contradictions between sections. Preserve the document's headings, tables, and structure. Do not add new findings and do not soften the removal of unsupported claims. Output only the corrected document, with no preamble.""" + STYLE_GUIDE + EVIDENCE_RULES
+REVIEW_SYSTEM_PROMPT = """You are an expert bioinformatician reviewing a bioinformatics report interpretation for factual grounding and internal consistency. Correct statements that are not supported by the underlying report data, remove claims about genes, proteins, or cell types that do not appear in the data, and resolve contradictions between sections. Preserve the document's headings, tables, and structure. Do not add new findings and do not soften the removal of unsupported claims. Output only the corrected document, with no preamble.""" + STYLE_GUIDE + EVIDENCE_RULES
 
 
 def build_review_prompt(text: str, findings: list) -> str:
     parts = [
-        "Review the spatial transcriptomics interpretation below. Correct any statement "
+        "Review the bioinformatics report interpretation below. Correct any statement "
         "that is not supported by the report data, and resolve any internal contradiction "
         "between sections. Do not introduce new claims, and do not invent gene or protein "
         "functions."
