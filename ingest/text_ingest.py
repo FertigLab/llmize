@@ -118,3 +118,66 @@ def split_multiqc_llms_full(text: str) -> tuple:
 
     return result, leading_instructions
 
+
+_TABLE_ROW_RE = re.compile(r"^\|(.+)\|$")
+_TABLE_SEPARATOR_RE = re.compile(r"^\|[\s:|-]+\|$")
+_SAMPLESHEET_ALIASES = {"sample sheet", "samplesheet", "sample_sheet"}
+
+
+def _split_row_cells(line: str) -> list:
+    return [cell.strip() for cell in line.strip()[1:-1].split("|")]
+
+
+def parse_markdown_table(text: str) -> dict:
+    """Parse the first markdown table found in text into {first_col_value: {col: val}}.
+
+    Scans for a header row, a '|---|---|...' separator row, then consecutive data
+    rows; ignores any surrounding prose. Returns {} if no valid table (header +
+    separator + at least one data row) is found.
+    """
+    lines = text.splitlines()
+    for i in range(len(lines) - 1):
+        header_match = _TABLE_ROW_RE.match(lines[i].strip())
+        if not header_match:
+            continue
+        if not _TABLE_SEPARATOR_RE.match(lines[i + 1].strip()):
+            continue
+        header = _split_row_cells(lines[i])
+        if len(header) < 2:
+            continue
+
+        rows = {}
+        for line in lines[i + 2:]:
+            row_match = _TABLE_ROW_RE.match(line.strip())
+            if not row_match:
+                break
+            cells = _split_row_cells(line)
+            row_id = cells[0]
+            if not row_id:
+                continue
+            rows[row_id] = {
+                col: cells[j] for j, col in enumerate(header[1:], start=1) if j < len(cells)
+            }
+        if rows:
+            return rows
+    return {}
+
+
+def extract_samplesheet_chunk(sections: dict) -> tuple:
+    """Pop a sample-sheet-like chunk out of sections, returning (remaining, parsed_dict).
+
+    Matches a chunk name against a small alias set (case-insensitive, ignoring any
+    " — <section>" suffix). If matched and its body parses into a table with at least
+    two rows, the chunk is removed and the parsed {sample_id: {col: val}} dict is
+    returned. Otherwise sections is returned unchanged with None (fail-soft).
+    """
+    for name, obj in sections.items():
+        bare_name = name.split(" \u2014 ", 1)[0].strip().lower()
+        if bare_name not in _SAMPLESHEET_ALIASES:
+            continue
+        parsed = parse_markdown_table(obj.get("data", ""))
+        if len(parsed) >= 2:
+            remaining = {k: v for k, v in sections.items() if k != name}
+            return remaining, parsed
+    return sections, None
+

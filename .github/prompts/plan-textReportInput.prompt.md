@@ -12,7 +12,9 @@
 - Descriptor/annotation (descriptor_schema.json, MultiQC-specific merges): NOT applied
   to text mode. Skipped entirely.
 - Sample grouping (samplesheet-derived group stats/percentages): NOT applied to text
-  mode. Skipped entirely — generic summarization only.
+  mode initially. Superseded in part by Addendum 2 below, which adds shared
+  sample-sheet context + grouping-column awareness (but not per-metric numeric group
+  stats, since other text chunks remain unparsed prose/tables).
 - Output structure: mirrors JSON mode (per-section markdown + optional synthesis
   executive summary), using the same `combine_responses` shape but a generic title
   (not "MultiQC Spatial Transcriptomics Interpretation").
@@ -172,19 +174,95 @@ Title: Atlas Summary
   matching description, one without), plus a `looks_like_multiqc_llms_full` positive/
   negative case.
 
+## Addendum 2: shared sample-sheet context across chunks (confirmed with user)
+
+Rationale: LLM-based cross-sample analysis is only useful if sample metadata (response,
+timepoint, region, etc.) stays visible next to the actual results. JSON mode already does
+this (`build_samplesheet_context`/`sample_groups`, keyed off `multiqc_samplesheet`); text
+mode currently treats the "Sample Sheet" chunk as just another opaque chunk, with no
+cross-chunk awareness of metadata or which columns can group samples.
+
+### Decisions
+- Applies to chunks produced by **either** text chunker (`split_text_sections` and
+  `split_multiqc_llms_full`) — detection operates on the resulting `{name: {"data": ...}}`
+  dict, splitter-agnostic.
+- Chunk-name match is a strict, case-insensitive alias check against
+  `{"sample sheet", "samplesheet", "sample_sheet"}` (after stripping any
+  `" — <section>"` suffix added by `split_multiqc_llms_full`). No fuzzy/substring
+  matching, to avoid swallowing an unrelated real data section.
+- Once matched, the chunk's `data` text is parsed as a markdown table (first column =
+  row/sample id). If parsing fails or yields fewer than 2 rows, treat as "not found":
+  leave the chunk untouched and add no shared context (fail-soft, same philosophy as
+  the rest of text-mode enrichment).
+- On success, the chunk is popped out of the per-chunk analysis list entirely (mirrors
+  JSON mode's `iter_analysis_sections` skipping `multiqc_samplesheet`) and instead
+  used to build a shared context block appended to the system prompt for every
+  remaining chunk **and** the synthesis pass.
+- `--whole-report`: no change needed — the full raw text (including the sample sheet)
+  is already sent as a single blob.
+- `--as-is`: the shared sample-sheet context is still added regardless of `as_is`;
+  only the *style/format* system prompt varies with `as_is`, not this metadata-context
+  enrichment.
+- Reuses (via refactor, not duplication) the existing group-detection logic
+  (`sample_groups`/`build_samplesheet_context`) by splitting each into a thin
+  report-shaped wrapper plus a shape-agnostic core function operating on a plain
+  `{sample_id: {col: value}}` dict, so text mode calls the same core logic JSON mode
+  already relies on.
+
+### New pieces
+- `ingest/text_ingest.py`:
+  - `parse_markdown_table(text) -> dict` — finds the first `|...|` header + `|---|...|`
+    separator + data rows in `text` (ignoring surrounding prose), returns
+    `{first_column_value: {other_col: value, ...}}` per row. Returns `{}` if no valid
+    table is found.
+  - `extract_samplesheet_chunk(sections: dict) -> tuple[dict, dict | None]` — looks for
+    a chunk name matching the alias set above; if found and its body parses into a
+    table with >= 2 rows via `parse_markdown_table`, returns
+    `(sections_without_that_chunk, parsed_samplesheet_dict)`; otherwise returns
+    `(sections, None)` unchanged.
+- `interpret.py`:
+  - Refactor `sample_groups(report)` into a thin wrapper around a new
+    `_sample_groups_from_data(samplesheet_data: dict, max_group_values=10) -> dict`
+    (current body of `sample_groups`, minus the report/`SAMPLESHEET_KEY` unwrapping).
+  - Refactor `build_samplesheet_context(report)` into a thin wrapper around a new
+    `_samplesheet_context_block(samplesheet_data: dict, groups: dict) -> str` (current
+    body, minus the report unwrapping). Pure refactor — JSON-mode behavior unchanged.
+  - `interpret_text_report`: after building `sections` (non-whole-report branch, either
+    splitter), call `extract_samplesheet_chunk`; if a samplesheet dict comes back,
+    compute `groups = _sample_groups_from_data(...)` and
+    `samplesheet_context = _samplesheet_context_block(...)`, append it to `system`
+    (after the base prompt, before `build_user_instruction`), and pass it through to
+    `_run_chunks(..., samplesheet_context=samplesheet_context)` so synthesis also sees
+    it (the parameter already exists on `_run_chunks`/`synthesize_sections`, just
+    unused by text mode today).
+- `tests/test_ingest.py`: tests for `parse_markdown_table` (clean table, table with
+  surrounding prose, no table present, malformed/short table) and
+  `extract_samplesheet_chunk` (match+pop, no match leaves sections untouched, match
+  but unparseable table leaves sections untouched).
+- `tests/test_interpret.py`: regression check that `sample_groups`/
+  `build_samplesheet_context` still behave identically after the refactor, plus a new
+  test that `interpret_text_report` excludes the Sample Sheet chunk from individual
+  analysis and includes the SAMPLE SHEET context block in the system prompt used for
+  every remaining chunk (reusing the existing stubbed-`chat_ollama` test style already
+  present in that file).
+
 ## Relevant files
 - `ingest/io_utils.py` — add `read_text`.
 - `ingest/text_ingest.py` (new) — `split_text_sections`, `looks_like_multiqc_llms_full`,
-  `split_multiqc_llms_full`.
+  `split_multiqc_llms_full`, `parse_markdown_table`, `extract_samplesheet_chunk`.
 - `ingest/__init__.py` — export additions.
 - `interpret.py` — `TEXT_SYSTEM_PROMPT`, `TEXT_AS_IS_SYSTEM_PROMPT`, `build_prompt_text`,
   `build_text_section_prompt`, `_run_chunks` refactor, `interpret_text_report(..., as_is)`
-  (now also dispatching to the MultiQC-specific splitter when detected),
-  `combine_responses(title=...)`.
+  (now also dispatching to the MultiQC-specific splitter when detected, and injecting
+  shared sample-sheet context), `combine_responses(title=...)`,
+  `_sample_groups_from_data`/`_samplesheet_context_block` (extracted from
+  `sample_groups`/`build_samplesheet_context`).
 - `llmize.py` — `is_json_input`, `--as-is` flag, `run_text_pipeline`, dispatch in
   `main()`, warnings for `--review`/`--save-intermediates` in text mode.
-- `tests/test_ingest.py` — tests for `split_text_sections` and the new
-  `split_multiqc_llms_full`/`looks_like_multiqc_llms_full`.
+- `tests/test_ingest.py` — tests for `split_text_sections`, `split_multiqc_llms_full`/
+  `looks_like_multiqc_llms_full`, `parse_markdown_table`, `extract_samplesheet_chunk`.
+- `tests/test_interpret.py` — regression + new coverage for shared sample-sheet context
+  in text mode.
 
 ## Verification
 1. `python3 -m compileall llmize.py interpret.py check_env.py ingest`
@@ -199,4 +277,8 @@ Title: Atlas Summary
    blob; check descriptions are attached where the index has a matching entry.
 6. Manual: run `data/llms-full.txt` with `--as-is` and confirm the leading
    instructions block is used as the system prompt.
+7. Manual: run `data/llms-full.txt` in default (non-whole-report) mode and confirm the
+   "Sample Sheet" chunk is no longer analyzed on its own, and that other chunks'
+   prompts/system prompt carry the sample-sheet context + grouping note (e.g. the
+   `response` column).
 

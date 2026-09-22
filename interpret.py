@@ -11,7 +11,12 @@ from datetime import datetime
 import ollama
 
 from verify import deterministic_findings, extract_entities
-from ingest import split_text_sections, looks_like_multiqc_llms_full, split_multiqc_llms_full
+from ingest import (
+    split_text_sections,
+    looks_like_multiqc_llms_full,
+    split_multiqc_llms_full,
+    extract_samplesheet_chunk,
+)
 
 SAMPLESHEET_KEY = "multiqc_samplesheet"
 
@@ -112,12 +117,8 @@ def _split_descriptor(section_obj: dict) -> tuple:
     return descriptor, data
 
 
-def build_samplesheet_context(report: dict) -> str:
-    """Sample sheet block for the shared system prompt, naming the grouping columns."""
-    samplesheet = report.get(SAMPLESHEET_KEY)
-    if not isinstance(samplesheet, dict):
-        return ""
-    groups = sample_groups(report)
+def _samplesheet_context_block(samplesheet_data: dict, groups: dict) -> str:
+    """Build the shared SAMPLE SHEET context block from a plain {sample_id: {col: val}} dict."""
     if groups:
         cols = "; ".join(
             f"{col} ({', '.join(sorted(set(mapping.values())))})"
@@ -135,9 +136,18 @@ def build_samplesheet_context(report: dict) -> str:
         )
     return (
         "\n\n--- SAMPLE SHEET (shared context for every section below) ---\n"
-        f"```json\n{json.dumps(samplesheet, indent=2)}\n```\n"
+        f"```json\n{json.dumps(samplesheet_data, indent=2)}\n```\n"
         + grouping_note
     )
+
+
+def build_samplesheet_context(report: dict) -> str:
+    """Sample sheet block for the shared system prompt, naming the grouping columns."""
+    samplesheet = report.get(SAMPLESHEET_KEY)
+    if not isinstance(samplesheet, dict):
+        return ""
+    groups = sample_groups(report)
+    return _samplesheet_context_block(samplesheet, groups)
 
 
 def _percentages(counts: dict) -> dict:
@@ -196,16 +206,25 @@ def _is_number(s) -> bool:
 
 
 def sample_groups(report: dict, max_group_values: int = 10) -> dict:
-    """Auto-detect categorical grouping columns from the sample sheet.
+    """Auto-detect categorical grouping columns from the report's sample sheet.
+
+    Thin wrapper around `_sample_groups_from_data` that unwraps the report's
+    `multiqc_samplesheet` section into a plain {sample_id: {col: value}} dict.
+    """
+    samplesheet = report.get(SAMPLESHEET_KEY, {})
+    data = samplesheet.get("data", {}) if isinstance(samplesheet, dict) else {}
+    return _sample_groups_from_data(data, max_group_values=max_group_values)
+
+
+def _sample_groups_from_data(samplesheet_data: dict, max_group_values: int = 10) -> dict:
+    """Auto-detect categorical grouping columns from a plain {sample_id: {col: value}} dict.
 
     Returns {column: {sample_id: value}} for each sample-sheet column usable to group
     samples — 2+ distinct categorical values, not all-identical, not near-unique, not
     continuous. Duplicate partitions (e.g. timepoint vs timepoint_date) are collapsed.
     Metadata-agnostic: works for response, timepoint, region, sample_type, etc.
     """
-    samplesheet = report.get(SAMPLESHEET_KEY, {})
-    data = samplesheet.get("data", {}) if isinstance(samplesheet, dict) else {}
-    samples = {sid: meta for sid, meta in data.items() if isinstance(meta, dict)}
+    samples = {sid: meta for sid, meta in samplesheet_data.items() if isinstance(meta, dict)}
     n = len(samples)
     if n < 2:
         return {}
@@ -609,6 +628,7 @@ def interpret_text_report(
     synthesis_prompt = (
         TEXT_AS_IS_SYNTHESIS_SYSTEM_PROMPT if as_is else TEXT_SYNTHESIS_SYSTEM_PROMPT
     )
+    samplesheet_context = ""
     if whole_report:
         chunks = [("Whole report", build_prompt_text(text))]
     else:
@@ -620,17 +640,27 @@ def interpret_text_report(
                 base_prompt = leading_instructions
         else:
             sections = split_text_sections(text)
+
+        # Keep sample metadata next to the analysis: pull out a Sample Sheet-like
+        # chunk (if present and parseable) and reuse it as shared context instead of
+        # analyzing it in isolation, mirroring the JSON pipeline's samplesheet handling.
+        sections, samplesheet_data = extract_samplesheet_chunk(sections)
+        if samplesheet_data:
+            groups = _sample_groups_from_data(samplesheet_data)
+            samplesheet_context = _samplesheet_context_block(samplesheet_data, groups)
+
         chunks = [
             (name, build_text_section_prompt(name, obj["data"]))
             for name, obj in sections.items()
         ]
         if not chunks:
             chunks = [("Whole report", build_prompt_text(text))]
-    system = base_prompt + build_user_instruction(user_instruction)
+    system = base_prompt + samplesheet_context + build_user_instruction(user_instruction)
     return _run_chunks(
         chunks, model, system, num_ctx, synthesize_final, think, gen_options,
         title="Report Interpretation",
         synthesis_system_prompt=synthesis_prompt,
+        samplesheet_context=samplesheet_context,
     )
 
 

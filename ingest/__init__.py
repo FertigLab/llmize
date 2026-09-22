@@ -7,6 +7,8 @@ from .text_ingest import (
     split_text_sections,
     looks_like_multiqc_llms_full,
     split_multiqc_llms_full,
+    parse_markdown_table,
+    extract_samplesheet_chunk,
 )
 
 __all__ = [
@@ -21,4 +23,6 @@ __all__ = [
     "split_text_sections",
     "looks_like_multiqc_llms_full",
     "split_multiqc_llms_full",
+    "parse_markdown_table",
+    "extract_samplesheet_chunk",
 ]

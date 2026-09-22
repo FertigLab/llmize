@@ -20,6 +20,8 @@ from ingest import (
     split_text_sections,
     looks_like_multiqc_llms_full,
     split_multiqc_llms_full,
+    parse_markdown_table,
+    extract_samplesheet_chunk,
 )
 
 
@@ -164,6 +166,65 @@ class TestMultiqcLlmsFull(unittest.TestCase):
         )
         sections, _ = split_multiqc_llms_full(text)
         self.assertIn("Foo \u2014 Bar", sections)
+
+
+class TestParseMarkdownTable(unittest.TestCase):
+    def test_parses_clean_table(self):
+        text = "|sample|response|\n|---|---|\n|S1|responder|\n|S2|non-responder|\n"
+        table = parse_markdown_table(text)
+        self.assertEqual(table, {
+            "S1": {"response": "responder"},
+            "S2": {"response": "non-responder"},
+        })
+
+    def test_ignores_surrounding_prose(self):
+        text = (
+            "Tool: Sample Sheet\nTitle: Sample Sheet\n\n"
+            "|sample|type|\n|---|---|\n|S1|visium|\n\nsome trailing note\n"
+        )
+        table = parse_markdown_table(text)
+        self.assertEqual(table, {"S1": {"type": "visium"}})
+
+    def test_no_table_returns_empty_dict(self):
+        self.assertEqual(parse_markdown_table("just plain text, no pipes here\n"), {})
+
+    def test_single_column_table_returns_empty_dict(self):
+        text = "|sample|\n|---|\n|S1|\n|S2|\n"
+        self.assertEqual(parse_markdown_table(text), {})
+
+
+class TestExtractSamplesheetChunk(unittest.TestCase):
+    def test_pops_matching_samplesheet_chunk(self):
+        sections = {
+            "Sample Sheet": {"data": "|sample|response|\n|---|---|\n|S1|r|\n|S2|nr|\n"},
+            "Other Tool": {"data": "some data"},
+        }
+        remaining, parsed = extract_samplesheet_chunk(sections)
+        self.assertNotIn("Sample Sheet", remaining)
+        self.assertIn("Other Tool", remaining)
+        self.assertEqual(parsed, {"S1": {"response": "r"}, "S2": {"response": "nr"}})
+
+    def test_no_match_leaves_sections_unchanged(self):
+        sections = {"Other Tool": {"data": "some data"}}
+        remaining, parsed = extract_samplesheet_chunk(sections)
+        self.assertEqual(remaining, sections)
+        self.assertIsNone(parsed)
+
+    def test_match_with_unparseable_table_leaves_sections_unchanged(self):
+        sections = {"Sample Sheet": {"data": "no table here at all"}}
+        remaining, parsed = extract_samplesheet_chunk(sections)
+        self.assertEqual(remaining, sections)
+        self.assertIsNone(parsed)
+
+    def test_section_qualified_name_still_matches(self):
+        sections = {
+            "Sample Sheet \u2014 Overview": {
+                "data": "|sample|type|\n|---|---|\n|S1|a|\n|S2|b|\n"
+            },
+        }
+        remaining, parsed = extract_samplesheet_chunk(sections)
+        self.assertEqual(remaining, {})
+        self.assertEqual(parsed, {"S1": {"type": "a"}, "S2": {"type": "b"}})
 
 
 if __name__ == "__main__":
