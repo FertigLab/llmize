@@ -1,7 +1,7 @@
 process INTERPRET {
     tag "${report.baseName}"
     label "process_gpu"
-    resourceLimits cpus: 2, memory: 48.GB, time: '1h'
+    resourceLimits cpus: 2, memory: 48.GB, time: 24.h
     container "${params.container}"
     publishDir params.outdir, mode: 'copy'
 
