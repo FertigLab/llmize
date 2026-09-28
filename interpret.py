@@ -318,13 +318,12 @@ def _round_floats(obj, sig: int = 4):
 
 
 def build_section_prompt(section_name: str, section_obj: dict, groups: dict = None) -> str:
-    """Build the prompt analysing one MultiQC section."""
+    """Build the prompt analysing one report section."""
     descriptor, data = _split_descriptor(section_obj)
     analysis_instructions = descriptor.pop("analysis_instructions", None)
 
     prompt = (
-        f"Analyze the MultiQC section `{section_name}` in isolation.\n\n"
-        "Section descriptor (defines what each field/key/value means):\n"
+        f"Analyze the report section `{section_name}` in isolation.\n\n"
         f"```json\n{json.dumps(descriptor, indent=2)}\n```\n\n"
         "Section data:\n"
         f"```json\n{json.dumps(_round_floats(data), indent=2)}\n```\n\n"
@@ -466,7 +465,13 @@ def combine_responses(responses: list, summary: str = None, title: str = None) -
     return "\n".join(parts)
 
 
-REVIEW_SYSTEM_PROMPT = """You are an expert bioinformatician reviewing a bioinformatics report interpretation for factual grounding and internal consistency. Correct statements that are not supported by the underlying report data, remove claims about genes, proteins, or cell types that do not appear in the data, and resolve contradictions between sections. Preserve the document's headings, tables, and structure. Do not add new findings and do not soften the removal of unsupported claims. Output only the corrected document, with no preamble.""" + STYLE_GUIDE + EVIDENCE_RULES
+REVIEW_SYSTEM_PROMPT = """You are an expert bioinformatician reviewing a bioinformatics
+report interpretation for factual grounding and internal consistency. Correct statements
+that are not supported by the underlying report data, remove claims about genes,
+proteins, or cell types that do not appear in the data, and resolve contradictions
+between sections. Preserve the document's headings, tables, and structure. Do not add
+new findings and do not soften the removal of unsupported claims. Output only the
+corrected document, with no preamble.""" + STYLE_GUIDE + EVIDENCE_RULES
 
 
 def build_review_prompt(text: str, findings: list) -> str:

@@ -16,15 +16,23 @@ There are two ways to run it:
 
 ## Run with Nextflow
 
+Text, markdown, and JSON reports are all supported. By default, the workflow will split
+input into sections, interpret each separately, and then combine the results. Json, will
+be split by keys, and markdown by markdown headers. MultiQC report (llms-full.txt) will
+be split by MultiQC sections. Avoid chunking with the `--whole-report` flag.
+
 ```bash
-nextflow run main.nf --input data/multiqc_data.json
+nextflow run main.nf --input data[.txt|.md|.json] --whole-report
 ```
 
-To steer the model with your own instruction, add `--prompt`:
+A system prompt is included by default. To steer the model with your own additional
+instruction, add a `--user`, and to always use your own system prompt (from a file),
+add `--system`:
 
 ```bash
-nextflow run main.nf --input data/multiqc_data.json \
-   --prompt "Summarize immune infiltration and flag any tumor-immune interactions."
+nextflow run main.nf --input multiqc_data.json \
+   --user "Summarize immune infiltration and flag any tumor-immune interactions."
+   --system "path/to/your/system/prompt.txt"
 ```
 
 By default this uses the `docker` profile (see `nextflow.config`), which pulls
@@ -108,7 +116,7 @@ Common flags (see `python3 llmize.py --help` for the full list):
 
 ```bash
 python3 llmize.py --input data.json \
-   --prompt "Summarize immune infiltration and flag any tumor-immune interactions." \
+   --user "Summarize immune infiltration and flag any tumor-immune interactions." \
    --review --output my_interpretation.md
 ```
 
