@@ -12,6 +12,7 @@ import ollama
 
 from verify import deterministic_findings, extract_entities
 from ingest import (
+    read_text,
     split_text_sections,
     looks_like_multiqc_llms_full,
     split_multiqc_llms_full,
@@ -20,65 +21,15 @@ from ingest import (
 
 SAMPLESHEET_KEY = "multiqc_samplesheet"
 
-STYLE_GUIDE = """
-Style and register (apply throughout):
-- Write in the neutral, descriptive register of a peer-reviewed research paper.
-  Report what the data shows; do not editorialize, rate, or pass judgement on it.
-- Remove judgemental and evaluative language. Do NOT use words such as: striking,
-  remarkable, overwhelming, dominant(ly), extreme, dramatic, impressive, crucial,
-  notable(ly), interesting, surprising, concerning, alarming, poor, excellent, good,
-  bad, or superlatives; and do not use exclamations.
-- Lead with the data and tie every statement to specific values. Use hedged, precise
-  verbs for any inference: "suggests", "is consistent with", "indicates", "may",
-  "potentially". Prefer "associated with" over causal claims ("causes", "drives").
-- Report negative or null results plainly (e.g. "no differential signal was detected").
-- Present per-sample numbers in compact markdown tables rather than long inline lists.
-- When presenting summaries, check that all relevant samples are included.
-- Use plain formatting only: markdown headers, bold, and tables. Do NOT use LaTeX math
-  ($...$, \\text{}, \\mathbf{}) or emoji.
-- Be concise: do not restate the section name or descriptor, and do not repeat the same
-  adjective across sentences.
-- If a label or abbreviation's meaning is not provided, and it is not a commonly known 
-  acronym, use it verbatim; do not infer or expand what it stands for.
-"""
+_PROMPTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts")
 
-EVIDENCE_RULES = """
-Evidence and interpretation rules:
-- Tie every claim to numeric evidence. Do not infer causality; describe associations only.
-- State a between-group difference (for any sample-metadata grouping — e.g. response,
-  timepoint, region) ONLY if it is consistent across at least 2 samples per group, OR both
-  the mean and the median support the same direction. Otherwise state plainly:
-  "No consistent group-level difference detected."
-- When you say a group is higher or lower, check that the direction matches the numbers
-  (e.g. do not call the smaller mean "higher").
-- Do not generalize a pattern driven by a single sample. If one sample drives a group's
-  mean (an outlier), say so explicitly and treat that group-level claim as weak.
-- Assess within-group variability as low / moderate / high. If variability is high or the
-  trend is inconsistent, prefer a conservative interpretation or report no clear difference.
-- Briefly note relevant limitations where they affect a conclusion (e.g. ~3 samples per
-  group, high within-group variability, outlier influence) instead of implying certainty.
-"""
 
-SYSTEM_PROMPT = """You are an expert bioinformatician. You are given a report generated
-by a bioinformatics workflow. The report includes outputs from a number of bioinformatics
-tools and include quality control metrics, as well as actual aggregated analysis results.
-The report includes the samplesheet table that may contain important clinical metadata.
-Different report sections may have different structures and different biological meaning,
-and contains a short descriptor of the section's structure and meaning.Your task is to
-analyse the data and give a concise summary.
-""" + STYLE_GUIDE + EVIDENCE_RULES
+def _load_prompt(filename: str) -> str:
+    """Load a default system prompt from prompts/, so it can be read/edited outside Python."""
+    return read_text(os.path.join(_PROMPTS_DIR, filename)).strip()
 
-TEXT_SYSTEM_PROMPT = """You are an expert bioinformatician. You are given a plain-text
-report produced by a bioinformatics tool or workflow (for example, a MultiQC
-"llms-full.txt" export). It has no fixed schema, so infer the meaning of each
-section from its heading and content. Your task is to analyse it and give a
-concise summary.
-""" + STYLE_GUIDE + EVIDENCE_RULES
 
-TEXT_AS_IS_SYSTEM_PROMPT = """You are an expert bioinformatician. You are given a
-plain-text report produced by a bioinformatics tool or workflow. The text already
-contains its own analysis instructions and formatting guidance — follow those
-instructions exactly as written instead of any separate style guide."""
+SYSTEM_PROMPT = _load_prompt("system_prompt.md")
 
 
 def build_prompt(report: dict) -> str:
@@ -369,54 +320,7 @@ def iter_analysis_sections(report: dict):
             yield name, section_obj
 
 
-SYNTHESIS_SYSTEM_PROMPT = """You are an expert bioinformatician. You are given
-the per-section analyses of a bioinformatics report.
-
-Synthesize them into one concise executive summary of a few short paragraphs.
-Cover:
-- the overall picture and whether the pipeline appears to have run successfully,
-- any notable patterns or outliers in the data and other data quality issues,
-- the most important quantitative findings, citing key numbers and percentages,
-- findings across the report sections that are consistent with each other, or 
-  contradict each other,
-- in case contrast analysis is present, provide a clear verdict on whether the 
-  data supports difference across metadata groups,
-- in case no metadata present, summary should focus on overall similarity patterns
-
-Only surface findings that are well supported: consistent across at least 2
-samples per group, or supported by both the mean and the median. Exclude weak,
-single-sample-driven, or high-variability findings, or mention them only as not
-robust. Do not combine several weak signals into a strong conclusion. Where the
-data does not support a group difference, say so plainly.
-
-Be decisive and readable. Do not repeat each section verbatim or list sections
-one by one. Output only the summary prose — do NOT add your own title or markdown
-heading.
-""" + STYLE_GUIDE + EVIDENCE_RULES
-
-TEXT_SYNTHESIS_SYSTEM_PROMPT = """You are an expert bioinformatician. You are given
-the per-section analyses of a plain-text report produced by a bioinformatics
-tool or workflow.
-
-Synthesize them into one concise executive summary of a few short paragraphs.
-Cover:
-- the overall picture and whether the report appears internally consistent,
-- any notable patterns, outliers, or data-quality issues surfaced across sections,
-- the most important quantitative findings, citing key numbers and percentages,
-- findings across sections that are consistent with each other, or contradict each other,
-- any well-supported group differences only when the report itself provides the needed
-  grouping context; otherwise focus on overall patterns and limitations.
-
-Do not repeat each section verbatim or list sections one by one. Output only the
-summary prose — do NOT add your own title or markdown heading.
-""" + STYLE_GUIDE + EVIDENCE_RULES
-
-TEXT_AS_IS_SYNTHESIS_SYSTEM_PROMPT = """You are an expert bioinformatician. You are
-given the per-section analyses of a plain-text report produced by a bioinformatics
-tool or workflow. The report's text already carries its own analysis instructions
-and formatting guidance, so preserve that guidance while writing one concise
-executive summary across the sections. Output only the summary prose — do NOT add
-your own title or markdown heading."""
+SYNTHESIS_SYSTEM_PROMPT = _load_prompt("synthesis_system_prompt.md")
 
 
 def synthesize_sections(
@@ -465,13 +369,7 @@ def combine_responses(responses: list, summary: str = None, title: str = None) -
     return "\n".join(parts)
 
 
-REVIEW_SYSTEM_PROMPT = """You are an expert bioinformatician reviewing a bioinformatics
-report interpretation for factual grounding and internal consistency. Correct statements
-that are not supported by the underlying report data, remove claims about genes,
-proteins, or cell types that do not appear in the data, and resolve contradictions
-between sections. Preserve the document's headings, tables, and structure. Do not add
-new findings and do not soften the removal of unsupported claims. Output only the
-corrected document, with no preamble.""" + STYLE_GUIDE + EVIDENCE_RULES
+REVIEW_SYSTEM_PROMPT = _load_prompt("review_system_prompt.md")
 
 
 def build_review_prompt(text: str, findings: list) -> str:
@@ -626,13 +524,12 @@ def interpret_text_report(
 ) -> str:
     """Interpret a plain-text report (e.g. MultiQC llms-full.txt), bypassing the JSON pipeline.
 
-    `as_is` drops the style guide/evidence rules, assuming the text already carries its
-    own analysis instructions; it does not affect whole-report vs. heading-split chunking.
+    `as_is` assumes the text already carries its own analysis instructions, so no default
+    system prompt is used for the analysis stage (MultiQC's own leading instructions are
+    used instead when present); it does not affect whole-report vs. heading-split chunking.
+    The synthesis stage always uses SYNTHESIS_SYSTEM_PROMPT, `as_is` or not.
     """
-    base_prompt = TEXT_AS_IS_SYSTEM_PROMPT if as_is else TEXT_SYSTEM_PROMPT
-    synthesis_prompt = (
-        TEXT_AS_IS_SYNTHESIS_SYSTEM_PROMPT if as_is else TEXT_SYNTHESIS_SYSTEM_PROMPT
-    )
+    base_prompt = "" if as_is else SYSTEM_PROMPT
     samplesheet_context = ""
     if whole_report:
         chunks = [("Whole report", build_prompt_text(text))]
@@ -664,7 +561,6 @@ def interpret_text_report(
     return _run_chunks(
         chunks, model, system, num_ctx, synthesize_final, think, gen_options,
         title="Report Interpretation",
-        synthesis_system_prompt=synthesis_prompt,
         samplesheet_context=samplesheet_context,
     )
 
