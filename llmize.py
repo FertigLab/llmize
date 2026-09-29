@@ -116,9 +116,17 @@ def parse_args() -> argparse.Namespace:
              "(not saved) and kept out of the interpretation. On by default; --no-think disables it (faster).",
     )
     parser.add_argument(
-        "--prompt",
+        "--user",
+        dest="user_instruction",
         default=None,
         help="Extra instruction appended to the system prompt for every section.",
+    )
+    parser.add_argument(
+        "--system",
+        dest="system_prompt_file",
+        default=None,
+        help="Path to a file that fully replaces the default system prompt for the "
+             "analysis stage (style guide and evidence rules included).",
     )
     parser.add_argument("--temperature", type=float, default=None,
                         help="Sampling temperature (model default if unset; gemma4 defaults to 1).")
@@ -175,6 +183,7 @@ def run_pipeline(
     review: bool = False,
     review_passes: int = 2,
     save_intermediates: bool = False,
+    system_prompt_file: str | None = None,
 ) -> str:
     input_path = resolve_input_path(input_json)
     print(f"[pipeline] Loading raw JSON: {input_path}")
@@ -204,6 +213,7 @@ def run_pipeline(
         think=think,
         gen_options=gen_options,
         user_instruction=user_instruction,
+        system_prompt_file=system_prompt_file,
     )
 
     if review:
@@ -222,6 +232,7 @@ def run_pipeline(
         model=model, num_ctx=num_ctx, think=think, gen_options=gen_options,
         mode="whole-report" if whole_report else "section-by-section",
         user_instruction=user_instruction, input_path=input_path,
+        system_prompt_file=system_prompt_file,
     )
     save_text(response + footer, output_path)
     return output_path
@@ -238,6 +249,7 @@ def run_text_pipeline(
     gen_options: dict = None,
     user_instruction: str = "",
     as_is: bool = False,
+    system_prompt_file: str | None = None,
 ) -> str:
     input_path = resolve_input_path(input_txt)
     print(f"[pipeline] Loading raw text: {input_path}")
@@ -256,6 +268,7 @@ def run_text_pipeline(
         gen_options=gen_options,
         user_instruction=user_instruction,
         as_is=as_is,
+        system_prompt_file=system_prompt_file,
     )
 
     if output_path is None:
@@ -269,6 +282,7 @@ def run_text_pipeline(
     footer = build_run_footer(
         model=model, num_ctx=num_ctx, think=think, gen_options=gen_options,
         mode=footer_mode, user_instruction=user_instruction, input_path=input_path,
+        system_prompt_file=system_prompt_file,
     )
     save_text(response + footer, output_path)
     return output_path
@@ -299,10 +313,11 @@ def main() -> None:
             synthesize_final=not args.no_synthesis,
             think=args.think,
             gen_options=gen_options,
-            user_instruction=args.prompt,
+            user_instruction=args.user_instruction,
             review=args.review,
             review_passes=args.review_passes,
             save_intermediates=args.save_intermediates,
+            system_prompt_file=args.system_prompt_file,
         )
     else:
         if args.review:
@@ -319,8 +334,9 @@ def main() -> None:
             synthesize_final=not args.no_synthesis,
             think=args.think,
             gen_options=gen_options,
-            user_instruction=args.prompt,
+            user_instruction=args.user_instruction,
             as_is=args.as_is,
+            system_prompt_file=args.system_prompt_file,
         )
     print(f"[pipeline] Completed. Final report: {final_path}")
 
