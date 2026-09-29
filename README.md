@@ -186,6 +186,7 @@ are set explicitly, e.g. `--think false` or `--review true`.
 | `--output` | (none) | Path to the output file; if not specified, defaults to `<input_stem>_interpretation_<timestamp>.md` in the current directory. |
 | `--user` | (none) | Extra instruction appended to the system prompt for every section. |
 | `--system` | bundled default | Path to a file that fully replaces the default system prompt for the analysis stage. |
+| `--gpus` | `1` | Number of GPUs to allocate per job. |
 | `--num_ctx` | `32768` | Context window size. |
 | `--temperature` | model default | Sampling temperature (`0` = deterministic). |
 | `--top_p` | model default | Nucleus-sampling threshold. |
