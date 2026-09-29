@@ -13,6 +13,7 @@ import ollama
 from verify import deterministic_findings, extract_entities
 from ingest import (
     read_text,
+    resolve_path,
     split_text_sections,
     looks_like_multiqc_llms_full,
     split_multiqc_llms_full,
@@ -27,6 +28,11 @@ _PROMPTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts
 def _load_prompt(filename: str) -> str:
     """Load a default system prompt from prompts/, so it can be read/edited outside Python."""
     return read_text(os.path.join(_PROMPTS_DIR, filename)).strip()
+
+
+def load_system_prompt_override(path: str) -> str:
+    """Load a user-supplied file that fully replaces the default analysis system prompt."""
+    return read_text(resolve_path(path)).strip()
 
 
 SYSTEM_PROMPT = _load_prompt("system_prompt.md")
@@ -498,10 +504,12 @@ def interpret_report(
     think: bool = True,
     gen_options: dict = None,
     user_instruction: str = "",
+    system_prompt_file: str = None,
 ) -> str:
     """Interpret the report as one or more chunks; a single chunk is the whole report."""
     samplesheet_context = build_samplesheet_context(report)
-    system = (SYSTEM_PROMPT + samplesheet_context
+    base_prompt = load_system_prompt_override(system_prompt_file) if system_prompt_file else SYSTEM_PROMPT
+    system = (base_prompt + samplesheet_context
               + build_user_instruction(user_instruction))
     groups = sample_groups(report)
     chunks = build_chunks(report, whole_report, groups)
@@ -521,15 +529,20 @@ def interpret_text_report(
     gen_options: dict = None,
     user_instruction: str = "",
     as_is: bool = False,
+    system_prompt_file: str = None,
 ) -> str:
     """Interpret a plain-text report (e.g. MultiQC llms-full.txt), bypassing the JSON pipeline.
 
     `as_is` assumes the text already carries its own analysis instructions, so no default
     system prompt is used for the analysis stage (MultiQC's own leading instructions are
     used instead when present); it does not affect whole-report vs. heading-split chunking.
+    `system_prompt_file`, when set, takes precedence over both the default and `as_is`.
     The synthesis stage always uses SYNTHESIS_SYSTEM_PROMPT, `as_is` or not.
     """
-    base_prompt = "" if as_is else SYSTEM_PROMPT
+    if system_prompt_file:
+        base_prompt = load_system_prompt_override(system_prompt_file)
+    else:
+        base_prompt = "" if as_is else SYSTEM_PROMPT
     samplesheet_context = ""
     if whole_report:
         chunks = [("Whole report", build_prompt_text(text))]
@@ -538,7 +551,7 @@ def interpret_text_report(
         # `Tool:`/`Section:`/`Title:` block layout instead of falling back to one blob.
         if looks_like_multiqc_llms_full(text):
             sections, leading_instructions = split_multiqc_llms_full(text)
-            if as_is and leading_instructions:
+            if as_is and leading_instructions and not system_prompt_file:
                 base_prompt = leading_instructions
         else:
             sections = split_text_sections(text)
@@ -777,6 +790,7 @@ def build_run_footer(
     mode: str = "section-by-section",
     user_instruction: str = "",
     input_path: str = None,
+    system_prompt_file: str = None,
 ) -> str:
     """Markdown footer recording run parameters so each output is reproducible."""
     gen = gen_options or {}
@@ -800,6 +814,7 @@ def build_run_footer(
         f"top_p={g('top_p')}, top_k={g('top_k')}, num_predict={g('num_predict')}"
     )
     lines.append(f"- num_ctx: {num_ctx}")
+    lines.append(f"- system prompt: {'custom (' + system_prompt_file + ')' if system_prompt_file else 'default'}")
     if user_instruction:
         lines.append(f"- custom prompt: {user_instruction!r}")
     sha = _git_short_sha()

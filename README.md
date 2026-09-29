@@ -184,7 +184,8 @@ are set explicitly, e.g. `--think false` or `--review true`.
 | `--descriptor` | bundled schema | Descriptor schema JSON (JSON mode only), keyed by top-level section name; overlaid onto matching sections to tell the model what each field means. Copy `ingest/descriptor_schema.json` and edit it to describe your own report's sections, then pass the copy here. Sections with no matching entry pass through unannotated. |
 | `--model` | `gemma4` | Ollama model name. |
 | `--output` | (none) | Path to the output file; if not specified, defaults to `<input_stem>_interpretation_<timestamp>.md` in the current directory. |
-| `--prompt` | (none) | Extra instruction appended to the model prompt. |
+| `--user` | (none) | Extra instruction appended to the system prompt for every section. |
+| `--system` | bundled default | Path to a file that fully replaces the default system prompt for the analysis stage. |
 | `--num_ctx` | `32768` | Context window size. |
 | `--temperature` | model default | Sampling temperature (`0` = deterministic). |
 | `--top_p` | model default | Nucleus-sampling threshold. |
