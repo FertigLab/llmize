@@ -2,7 +2,7 @@ process INTERPRET {
     tag "${report.baseName}"
     label "process_gpu"
     resourceLimits cpus: 2, memory: 48.GB, time: 24.h
-    accelerator "${params.gpus}"
+    accelerator "${params.gpus}" as int
     container "${params.container}"
     publishDir params.outdir, mode: 'copy'
 
