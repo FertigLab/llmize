@@ -2,12 +2,14 @@ process INTERPRET {
     tag "${report.baseName}"
     label "process_gpu"
     resourceLimits cpus: 2, memory: 48.GB, time: 24.h
+    accelerator "${params.gpus}" as int
     container "${params.container}"
     publishDir params.outdir, mode: 'copy'
 
     input:
     path report
     path descriptor
+    path system_prompt
 
     output:
     path "*_interpretation_*.md", emit: interpretation
@@ -21,8 +23,9 @@ process INTERPRET {
     def review_flag  = "${params.review}".toBoolean()       ? "--review --review-passes ${params.review_passes}" : ''
     def whole_flag   = "${params.whole_report}".toBoolean() ? '--whole-report' : ''
     def synth_flag   = "${params.synthesis}".toBoolean()    ? '' : '--no-synthesis'
-    def prompt_escaped = params.prompt ? params.prompt.toString().replace("'", "'\"'\"'") : ''
-    def prompt_flag  = params.prompt ? "--prompt '${prompt_escaped}'" : ''
+    def user_escaped = params.user ? params.user.toString().replace("'", "'\"'\"'") : ''
+    def user_flag    = params.user ? "--user '${user_escaped}'" : ''
+    def system_flag  = params.system ? "--system '${system_prompt}'" : ''
     def temp_flag    = params.temperature != null ? "--temperature ${params.temperature}" : ''
     def seed_flag    = params.seed        != null ? "--seed ${params.seed}" : ''
     def top_p_flag   = params.top_p       != null ? "--top_p ${params.top_p}" : ''
@@ -43,7 +46,7 @@ process INTERPRET {
         --model '${params.model}' \\
         --num_ctx ${params.num_ctx} \\
         ${think_flag} ${review_flag} ${whole_flag} ${synth_flag} \\
-        ${prompt_flag} ${temp_flag} ${seed_flag} ${top_p_flag} \\
+        ${user_flag} ${system_flag} ${temp_flag} ${seed_flag} ${top_p_flag} \\
         ${top_k_flag} ${numpred_flag} \\
         --output "${report.baseName}_interpretation_\${STAMP}.md"
     """
@@ -55,6 +58,7 @@ workflow {
 
     ch_input = channel.fromPath(params.input, checkIfExists: true)
     ch_descriptor = channel.fromPath(params.descriptor, checkIfExists: true).first()
+    ch_system = params.system ? channel.fromPath(params.system, checkIfExists: true).first() : channel.value([])
 
-    INTERPRET(ch_input, ch_descriptor)
+    INTERPRET(ch_input, ch_descriptor, ch_system)
 }
