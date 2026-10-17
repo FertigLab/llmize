@@ -15,7 +15,7 @@ import interpret
 class TestInterpretTextReport(unittest.TestCase):
     @patch("interpret.ensure_model", return_value="test-model")
     @patch("interpret.chat_ollama")
-    def test_text_synthesis_uses_text_specific_prompt(self, chat_ollama, _ensure_model):
+    def test_text_synthesis_uses_synthesis_system_prompt(self, chat_ollama, _ensure_model):
         chat_ollama.side_effect = [
             ("section one", ""),
             ("section two", ""),
@@ -32,12 +32,12 @@ class TestInterpretTextReport(unittest.TestCase):
         self.assertEqual(chat_ollama.call_count, 3)
         self.assertEqual(
             chat_ollama.call_args_list[-1].kwargs["system"],
-            interpret.TEXT_SYNTHESIS_SYSTEM_PROMPT,
+            interpret.SYNTHESIS_SYSTEM_PROMPT,
         )
 
     @patch("interpret.ensure_model", return_value="test-model")
     @patch("interpret.chat_ollama")
-    def test_text_synthesis_uses_as_is_prompt_without_style_rules(self, chat_ollama, _ensure_model):
+    def test_text_synthesis_uses_synthesis_system_prompt_when_as_is(self, chat_ollama, _ensure_model):
         chat_ollama.side_effect = [
             ("section one", ""),
             ("section two", ""),
@@ -55,7 +55,7 @@ class TestInterpretTextReport(unittest.TestCase):
         self.assertEqual(chat_ollama.call_count, 3)
         self.assertEqual(
             chat_ollama.call_args_list[-1].kwargs["system"],
-            interpret.TEXT_AS_IS_SYNTHESIS_SYSTEM_PROMPT,
+            interpret.SYNTHESIS_SYSTEM_PROMPT,
         )
 
 
